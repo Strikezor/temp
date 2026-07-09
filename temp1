@@ -1,0 +1,1301 @@
+package com.tcs.bancs.microservices.controller;
+
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.sql.SQLException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+import javax.crypto.SecretKey;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.sql.rowset.serial.SerialException;
+
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.tcs.bancs.microservices.Encryption.EDMSEncryption;
+import com.tcs.bancs.microservices.config.CacheConfig;
+import com.tcs.bancs.microservices.configuration.PropertyLoader;
+import com.tcs.bancs.microservices.db.model.EDMS_LOGS;
+import com.tcs.bancs.microservices.repository.EDMS_REPO;
+import com.tcs.bancs.microservices.request.CommonDataBean;
+import com.tcs.bancs.microservices.request.EDMS_REQ;
+import com.tcs.bancs.microservices.request.RequestBean;
+import com.tcs.bancs.microservices.request.TempReqBean;
+import com.tcs.bancs.microservices.request.UploadDocumentList;
+import com.tcs.bancs.microservices.response.EDMS_Response;
+import com.tcs.bancs.microservices.util.FrameworkConstants;
+import com.tcs.bancs.microservices.utils.ReqRefGenerator;
+import com.tcs.bancs.microservices.utils.SSLUtil;
+
+import oracle.security.crypto.core.DES;
+
+@RestController
+@Controller
+@RequestMapping("/EDMS")
+public class EDMSUpload_Controller {
+	private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSUpload_Controller.class);
+	private static EDMS_REPO edms_REPO;
+
+	private static String edmsURL1 = null;
+	private static String hostPublic = null;
+	private static String privateKey_DigISign = null;
+	private static String DocumentPath = null;
+	private static final String CHAR_SET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+	private static final SecureRandom random = new SecureRandom();
+	private static final int LENGTH = 6;
+	private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
+
+//
+//	@SuppressWarnings("unused")
+	@SuppressWarnings("static-access")
+	public EDMSUpload_Controller(@Value("${EDMS_UPLOAD_URL}") String edmsURL1,
+			@Value("${HOSTpublicKeyPath}") String hostPublic,
+			@Value("${PrivateKey_DigiSign}") String privateKey_DigISign,
+			@Value("${DocumentPath}") String DocumentPath, EDMS_REPO edms_REPO) {
+		this.edmsURL1 = edmsURL1;
+		this.hostPublic = hostPublic;
+		this.privateKey_DigISign = privateKey_DigISign;
+		this.DocumentPath = DocumentPath;
+		this.edms_REPO=edms_REPO;
+	}
+
+	String ErrorCodeMasterFilePath = CacheConfig.frameworkConfigProperties
+			.getProperty(FrameworkConstants.LOOKUP_FILES_PATH);
+
+	Properties error = PropertyLoader
+			.readPropertyFile(new String(ErrorCodeMasterFilePath + "/ErrorCodeMaster.properties"));
+
+	@SuppressWarnings("unused")
+	@PostMapping(value = { "/EDMS_Upload" }, produces = { "application/json" })
+	public ResponseEntity<String> EDMS_Upload(@RequestBody(required = false) EDMS_REQ reqbean,
+			HttpServletRequest request, @RequestHeader HttpHeaders headers, HttpServletResponse response)
+			throws SerialException, SQLException, ParseException, NoSuchProviderException {
+
+//		String txn_no = "009901";
+//		String txn_name = "ACH BGL Accounts";
+		Gson gson = new Gson();
+		String finalResponse = "";
+		String remoteAddress = request.getRemoteAddr();
+		String tellerNo = new String();
+		String SourceId = "";
+		String ReqRefNo = null;
+
+		DateTimeFormatter entryDate1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss:SSS");
+		LocalDateTime timex = LocalDateTime.now();
+		String entryDate = entryDate1.format(timex);
+		String teller_date = entryDate.replace("-", "").substring(0, 9);
+		String CLIENT_IP = request.getHeader("X-Forwarded-For");
+		EDMS_Response result = new EDMS_Response();
+
+		response.setHeader("X-Content-Type-Options", "nosniff");
+		response.setHeader("X-Frame-Options", "DENY");
+		response.setHeader("Content-Security-Policy", "default-src 'self'");
+		response.setHeader("X-XSS-Protection", "1;mode=block");
+		response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+//		response.setHeader("Access-Control-Allow-Origin", origins);
+		response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+		Date date = new Date();
+		SimpleDateFormat dateFormat = new SimpleDateFormat("dd-MM-yyyy");
+		String uploadDate = dateFormat.format(date);
+		CommonDataBean dataBean = new CommonDataBean();
+
+		dataBean.setCategory("Image");
+		dataBean.setBranchCode("61076");
+		dataBean.setCreationDate(uploadDate);
+		dataBean.setUploadDate(uploadDate);
+		dataBean.setApplicationID("AADESH_CBSDEV");
+
+		File sourceFolder = new File(DocumentPath);
+		File[] listOfDocuments = sourceFolder.listFiles();
+
+		int count = 0;
+		for (File Document : listOfDocuments) {
+
+			String base64doc = encodeFileToBase64(Document);
+			count++;
+			EDMSUpload_Controller.callEDMSApi(base64doc, Document.getName().toString(), dataBean);
+		}
+
+		System.out.println(dataBean);
+
+		return null;
+	}
+
+	public static EDMS_Response callEDMSApi(String documents, String reportName, CommonDataBean dataBean)
+			throws NoSuchProviderException {
+		String edmsURL = edmsURL1;
+		PublicKey edmsServerPublicKey = null;
+		System.out.println("hostPublic    " + hostPublic);
+		edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+
+		String RefNo = ReqRefGenerator.generate("E");
+		String uniqueIdentifier = RefNo;
+
+		String uniqueCBSREPOServerID = EDMSEncryption.generateUniqueServerId();
+		SecretKey aesKey = EDMSEncryption.generateAESkey();
+
+		Gson gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
+
+		RequestBean request = new RequestBean();
+		List<UploadDocumentList> list = new ArrayList<UploadDocumentList>();
+		UploadDocumentList request1 = new UploadDocumentList();
+		request.setBranchCode(dataBean.getBranchCode());
+		request.setApplicationID("AADESH_CBSDEV");
+		request.setUniqueIdentifier(uniqueIdentifier);
+		request1.setBase64(documents);
+		request1.setDocumentName(reportName);
+		list.add(request1);
+		request.setDocuments(list);
+		System.out.println("DATA OF THE ReQUEST:    " + request.getBranchCode() + " " + request.getApplicationID() + " "
+				+ request.getUniqueIdentifier() + "      " + request.toString());
+		TempReqBean FirstReq = new TempReqBean();
+		FirstReq.setUniqueSourceServerID(uniqueCBSREPOServerID);
+		FirstReq.setApplicationID("AADESH_CBSDEV");
+		String uniqueSourceServerID = gson.toJson(FirstReq);
+
+		String encryptedUniqueSourceServerID = null;
+		encryptedUniqueSourceServerID = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey,
+				uniqueSourceServerID);
+
+		System.out.println("AesKey " + aesKey);
+		System.out.println("edmsServerPublicKey " + edmsServerPublicKey);
+		System.out.println("uniqueSourceServerID " + uniqueSourceServerID);
+		System.out.println("encryptedUniqueSourceServerID " + encryptedUniqueSourceServerID);
+
+		logger.info("First request preparation completed. Unique ID: {}", uniqueCBSREPOServerID);
+		logger.info("REQUEST: " + FirstReq.toString());
+
+		try {
+			SSLUtil.turnOffSSLChecking();
+		} catch (NoSuchAlgorithmException e) {
+			logger.error("SSL configuration error - NoSuchAlgorithmException", e);
+			return null;
+		} catch (KeyManagementException e) {
+			logger.error("SSL configuration error - KeyManagementException", e);
+			return null;
+		}
+
+		String responseString = null;
+		logger.info("EDMS call to URL: {}", edmsURL);
+		try {
+			logger.info("--------------------------- First EDMS Call Started ---------------------------");
+			responseString = sendPostRequest(edmsURL, encryptedUniqueSourceServerID, "");
+			logger.info("---------------------------  First EDMS Call Ended  ---------------------------");
+			logger.info("First EDMS call completed successfully. Response length: {} characters",
+					responseString.toString());
+		} catch (Exception e) {
+			logger.error("--------------------------- UNABLE TO FETCH EDMS RESPONSE ---------------------------"
+					+ e.getMessage());
+			logger.error("Failed to complete first EDMS call. Error: {}", e.getMessage(), e);
+			return null;
+		}
+
+		logger.info("Status code for temp response: 200");
+
+		String[] tempResponse = responseString.split(",");
+		String encReceiverAccessToken = tempResponse[0];
+		String signedReceiverTokenHash = tempResponse[1];
+
+		PrivateKey privateKey = null;
+		privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+		String receiverAccessToken = null;
+		receiverAccessToken = EDMSEncryption.decReceiverAccessToken(privateKey, encReceiverAccessToken);
+		String senderTokenHash = null;
+		senderTokenHash = EDMSEncryption.generateSenderTokenHash(receiverAccessToken);
+
+		boolean hashMatched = false;
+		hashMatched = EDMSEncryption.verifyReceiverTokenHash(edmsServerPublicKey, signedReceiverTokenHash,
+				senderTokenHash);
+		if (hashMatched) {
+			String signedSenderTokenHash = null;
+			signedSenderTokenHash = EDMSEncryption.signSenderTokenHash(privateKey, senderTokenHash);
+
+			String signedSenderTokenHashWithID = signedSenderTokenHash + "," + uniqueCBSREPOServerID;
+			signedSenderTokenHashWithID = signedSenderTokenHashWithID.replaceAll("\n", "");
+
+			logger.info("Token verification successful. Proceeding to reuse token.");
+
+			return reuseToken(signedSenderTokenHashWithID, request, gson, edmsURL);
+
+		} else {
+			logger.warn("Token verification failed for unique ID: {}", uniqueCBSREPOServerID);
+		}
+
+		return null;
+	}
+
+	private static String sendPostRequest(String url, String jsonBody, String token) throws IOException {
+		URL obj = new URL(url);
+		HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+
+		con.setRequestMethod("POST");
+		con.setRequestProperty("Content-Type", "application/json");
+		con.setRequestProperty("Accept", "application/json");
+
+		// Set the token header empty only
+		con.setRequestProperty("signedSenderTokenHash", token);
+
+		con.setDoOutput(true);
+		con.setConnectTimeout(15000);
+		con.setReadTimeout(45000);
+
+		logger.debug("Sending POST request to: {} with body size: {} characters", url, jsonBody.length());
+
+		try (OutputStream os = con.getOutputStream()) {
+			byte[] input = jsonBody.getBytes(StandardCharsets.UTF_8);
+			os.write(input, 0, input.length);
+		}
+
+		int responseCode = con.getResponseCode();
+		logger.debug("HTTP Response Code: {}", responseCode);
+
+		if (responseCode != 200) {
+			// Log the response body for debugging 400 errors
+			try (BufferedReader br = new BufferedReader(
+					new InputStreamReader(con.getErrorStream(), StandardCharsets.UTF_8))) {
+				StringBuilder errorResponse = new StringBuilder();
+				String responseLine;
+				while ((responseLine = br.readLine()) != null) {
+					errorResponse.append(responseLine.trim());
+				}
+				logger.error("HTTP Error Response: {}", errorResponse.toString());
+			}
+			throw new IOException("HTTP error code: " + responseCode);
+		}
+
+		try (BufferedReader br = new BufferedReader(
+				new InputStreamReader(con.getInputStream(), StandardCharsets.UTF_8))) {
+			StringBuilder response = new StringBuilder();
+			String responseLine;
+			while ((responseLine = br.readLine()) != null) {
+				response.append(responseLine.trim());
+			}
+			logger.debug("Response received. Size: {} characters", response.toString());
+			return response.toString();
+		}
+	}
+
+	public static EDMS_Response reuseToken(String signedSenderTokenHashWithID, RequestBean request, Gson g,
+			String edmsURL) throws NoSuchProviderException {
+		Gson gson = null;
+		if (g != null)
+			gson = g;
+		else {
+			gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
+		}
+
+		EDMS_Response finalResponse = new EDMS_Response();
+		String decryptedResponse = null;
+		String finalJSONReq = gson.toJson(request);
+
+		logger.info("final request : {\r\n" + "  \"channelID\":" + " \"" + request.getApplicationID() + "\",\r\n"
+				+ "  \"branchCode\":" + " \"" + request.getBranchCode() + "\",\r\n" + "  \"uniqueIdentifier\":" + " \""
+				+ request.getUniqueIdentifier() + "\",\r\n" + "  \"documents\": [" + "\r\n" + "    {\r\n"
+				+ "      \"documentName\":" + " \"" + request.getDocuments().get(0).getDocumentName() + "\"\r\n"
+				+ "    }\r\n  ]\r\n}");
+
+		SecretKey aesKey = EDMSEncryption.generateAESkey();
+		PublicKey edmsServerPublicKey = null;
+		edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+		;
+
+		String encryptedRequest = null;
+		logger.info("Encrypting final request with AES key: {}", aesKey);
+		encryptedRequest = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey, finalJSONReq);
+
+		try {
+			SSLUtil.turnOffSSLChecking();
+		} catch (NoSuchAlgorithmException e) {
+			logger.error("SSL configuration error - NoSuchAlgorithmException", e);
+			return null;
+		} catch (KeyManagementException e) {
+			logger.error("SSL configuration error - KeyManagementException", e);
+			return null;
+		}
+
+		String finalResponseString = null;
+		try {
+			logger.info("--------------------------- Final EDMS Call Started ---------------------------");
+			finalResponseString = sendPostRequest(edmsURL, encryptedRequest, signedSenderTokenHashWithID);
+			logger.info("---------------------------  Final EDMS Call Ended  ---------------------------");
+			logger.info("Final EDMS call completed successfully. Response length: {} characters",
+					finalResponseString.length());
+		} catch (Exception e) {
+			logger.error("--------------------------- UNABLE TO FETCH EDMS RESPONSE ---------------------------"
+					+ e.getMessage());
+			return null;
+		}
+
+		PrivateKey privateKey = null;
+		privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+
+		if (finalResponseString != null && !finalResponseString.isEmpty()) {
+			decryptedResponse = EDMSEncryption.decryptResponse(finalResponseString, privateKey);
+			Map<String, Object> response = new HashMap<>();
+			ObjectMapper mapper = new ObjectMapper();
+			try {
+				response = mapper.readValue(decryptedResponse, new TypeReference<Map<String, Object>>() {
+				});
+			} catch (JsonProcessingException e) {
+				// TODO Auto-generated catch block
+				logger.error(e.getMessage());
+			}
+			logger.info("Final response decrypted. Response size: {} characters", decryptedResponse.length());
+			logger.info("Final decrypted response: {}", decryptedResponse);
+			List<Map<String, Object>> nameIdBeans = (List<Map<String, Object>>) response.get("name_IdBeans");
+			String responseCode = (String) response.get("responseCode");
+			String responseMsg = (String) response.get("responseMsg");
+			String uniqueIdentifier = (String) response.get("uniqueIdentifier");
+
+			if (nameIdBeans.get(0).get("uploadResponseCode").equals("00") || nameIdBeans.get(0).get("uploadResponseCode").equals("809")) {
+				String path = DocumentPath + "/" + nameIdBeans.get(0).get("documentName");
+				Path src = Paths.get(path);
+				System.out.println(path);
+				Path desti = Paths.get(destinationPath + "/Success_Files/" + nameIdBeans.get(0).get("documentName"));
+				System.out.println(desti);
+				
+				try {
+					Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					logger.error(e.getMessage());
+				}
+				EDMS_LOGS edmsLogs = new EDMS_LOGS();
+				edmsLogs.setBRANCH_CODE(request.getBranchCode());
+				edmsLogs.setID((String)nameIdBeans.get(0).get("documentId"));
+				edmsLogs.setNAME((String)nameIdBeans.get(0).get("documentName"));
+				edmsLogs.setRESPONSE_CODE((String)nameIdBeans.get(0).get("uploadResponseCode"));
+				edmsLogs.setRESPONSE_MESSAGE((String)nameIdBeans.get(0).get("uploadResponse"));
+				edmsLogs.setUNIQUE_IDENTIFIER(uniqueIdentifier);
+				edmsLogs.setUPLOAD_DATE(LocalDate.now());
+				edmsLogs.setFILE_TYPE("Image");
+				
+				System.out.println(edmsLogs.toString());
+				System.out.println("JMD "+edms_REPO); 
+				edms_REPO.save(edmsLogs);
+			} else {
+				String path = DocumentPath + "/" + nameIdBeans.get(0).get("documentName");
+				Path src = Paths.get(path);
+				System.out.println(path);
+				Path desti = Paths.get(destinationPath + "/Failure_Files/" + nameIdBeans.get(0).get("documentName"));
+				System.out.println(desti);
+				
+				try {
+					Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					logger.error(e.getMessage());
+				}
+			}
+		}
+		finalResponse = gson.fromJson(decryptedResponse, EDMS_Response.class);
+
+		EDMS_Response dl = finalResponse;
+		logger.info("Processing completed successfully for unique ID: {}",
+				request.getUniqueIdentifier() != null ? request.getUniqueIdentifier() : "unknown");
+
+		return dl;
+	}
+
+	private static String encodeFileToBase64(File file) {
+		try {
+			byte[] fileContent = Files.readAllBytes(file.toPath());
+			return Base64.getEncoder().encodeToString(fileContent);
+		} catch (IOException e) {
+			throw new IllegalStateException("Could not read file " + file, e);
+		}
+	}
+}
+
+
+
+this is the upload controller, i want to implement the search controller which downloads the image uploaded through this, images are searched through the method described below it is just like this one, it also follows the 2 step archtecture where first we send a request to get the token and then we attach the token in the second request. Go through the data given below and create such search controller. Take the document id as hard coded string : "X5OBDDML20987" which i will change later. leave it as it is and pass it to through the method in parameter. Here is the documentation to refer to : 
+
+EDMS Source Authentication Detailed 
+Flow and FAQs 
+September 2021, Version 1.4 
+Module 
+Functionality 
+EDMS  
+Brief Description 
+Implementation of source authentication, encryption and decryption 
+using RSA and AES Algorithms on EDMS APIs’ 
+Document will provide a brief on how to implement source 
+authentication using RSA-OAEP algorithm along with AES-GCM 
+algorithm for encryption and decryption of request and response. 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+Confidential 
+This document is confidential and is given to you in confidence. You 
+may only use the information it contains for the purpose it was 
+provided. Access must be restricted to your employees and 
+professional advisers who need access for the specified purpose. 
+You must not otherwise disclose or use the information it contains 
+except as required by law or where that information has lawfully 
+become public knowledge. 
+Notice 
+This is a controlled document. Unauthorised access, copying, 
+replication or usage for a purpose other than for which it is 
+intended, are prohibited. 
+All trademarks that appear in the document have been used for 
+identification purposes only and belong to their respective 
+companies. 
+SBI – Special Projects III Dept. 
+GITC Nerul, NaviMumbai 
+2 
+        SBI EDMS                                                EDMS Source Authentication Detailed Flow And FAQs 
+3 
+ 
+ 
+ 
+Document Revision or Change Control 
+ 
+Customer:  State Bank of India 
+Project:  SBI EDMS 
+Document Name:   EDMS Source Authentication Detailed Flow And FAQs 
+ 
+Release Notice Reference (for release) 
+Date Version 
+Number TCS Associate Name Reason for Change 
+19-June-2020 1.0 Aniket Doke Draft version 
+08-July-2020 1.1 Aniket Doke Approach breakdown analysis and in detailed step 
+by step explanation of logic 
+30-October
+2020 1.2 Aniket Doke, Pratibha 
+Mhatre SHA256 implementation in existing approach logic 
+24-May-2021 1.3 Shruti Zinje Updation of link for Source Code 
+15-September
+2021 1.4 Skanda Rao ChannelID changed to applicationID 
+ 
+ 
+ 
+Sign-off (If the IT is internal, customer’s sign-off may not be required)    
+ 
+Sign-off Stage Sign-off Person Name Due Date 
+Technical Sign-off TCS - Technical Pooja Gangrade 15-September
+2020 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+Himanshu Vanshlaj,  
+Technical Sign-off 
+AO - EDMS 
+Avijit Shaw 
+4 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+About this Document 
+Purpose 
+The document gives a brief description of how to implement source authentication using RSA
+OAEP Algorithm and AES-GCM Algorithm for encryption and decryption of request and 
+response in order to do integration between EDMS and new on boarding application. 
+NOTE: Document provides implementation in Java (JDK 8 and above). 
+List of Abbreviations 
+Abbreviation 
+Expanded Form 
+RSA  
+Rivest Shamir Adleman (Algorithm) 
+OAEP 
+Optimal Asymmetric Encryption Padding 
+AES 
+Advanced Encryption Standard (Algorithm) 
+GCM 
+Galois/Counter Mode 
+eDMS 
+Enterprise Document Management System 
+5 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+Flow 
+ RSA Public/Private Key Pairs will be generated at both the ends (Destination (EDMS) 
+as well as Source (Client)) and Public Keys will be exchanged between both. 
+Note: EDMS Public Key (In DER Format) will be shared over email. You can share your 
+Public Key in (.pub OR DER) format over email. 
+1. Client will send initiation request to EDMS by passing "signedSenderTokenHash" 
+as blank initially like ("signedSenderTokenHash", "") in request header. 
+Also, applicationID and uniqueSourceServerID (uniquely generated by source 
+server) in JSON format, will be encrypted by AES-GCM algorithm and passed in 
+request body.  
+Step I: Generate AES (Secret) Key: 
+SecretKey aesKey = ClientUtility.generateAESkey(); 
+Method: 
+public static SecretKey generateAESkey() { 
+// --- generate a new AES secret key --- 
+KeyGenerator aesKeyGenerator; 
+try { 
+aesKeyGenerator = KeyGenerator.getInstance("AES"); 
+} catch (NoSuchAlgorithmException e) { 
+throw new RuntimeException( 
+"Runtime doesn't have support for AES key generator (mandatory 
+algorithm for runtimes)", e); 
+} 
+6 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+// for AES-192 and 256 make sure you've got the rights install the 
+Unlimited Crypto Policy files 
+aesKeyGenerator.init(256); 
+SecretKey aesKey = aesKeyGenerator.generateKey(); 
+return aesKey; 
+} 
+Step II: Get Java PublicKey Format From EDMS Public Key: 
+String pubFilename="E:\\ServerPublicKey\\STAppPublicKey.der"; 
+PublicKey edmsServerPublicKey = 
+ClientUtility.getPublicKey(pubFilename); 
+Method: 
+public static PublicKey getPublicKey(String pubFilename)   throws 
+Exception { 
+CertificateFactory cf =   CertificateFactory.getInstance("X.509"); 
+FileInputStream fis = new FileInputStream(pubFilename); 
+X509Certificate cert = (X509Certificate) cf.generateCertificate(fis); 
+PublicKey publicKey = cert.getPublicKey(); 
+return publicKey; 
+} 
+Step III: Generate Unique ID On Your Server (Length – 16 Alphanumeric 
+Characters) And Store In Your Session Or Database: 
+Method: 
+String uniqueSourceServerID = 
+RandomStringUtils.randomAlphanumeric(16); 
+7 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+Step IV: Encrypt Unique ID Generated In Step III: --> Generate Clear Text JSON Format Which Includes Respective Application ID And Unique 
+ID Generated In Step III: 
+String uniqueSourceServerID = 
+"{\"applicationID\":\"CBS\",\"uniqueSourceServerID\":\"jmXRDMX3kkPMZzY
+m\"}"; 
+NOTE: Instead of CBS in applicationID send your identity. --> Now Pass AES (Secret) Key Generated In Step I, Java PublicKey Generated In Step II 
+And Clear Text JSON Format (Initiation Request) Generated Above For Encryption: 
+String encryptedUniqueSourceServerID = 
+ClientUtility.encryptRawJSON(aesKey, edmsServerPublicKey, 
+uniqueSourceServerID); 
+Method: 
+/** 
+* Encrypts the data using a hybrid crypto-system which uses GCM 
+to encrypt the 
+* data and OAEP to encrypt the AES key. The key size of the AES 
+encryption will 
+* be 256 bit. All the default parameter choices are used for 
+OAEP and GCM. 
+*  
+* @param publicKey 
+*            the RSA public key used to wrap the AES key 
+* @param rawJSON 
+*            the rawJSON to be encrypted, not altered 
+* @return the ciphertext 
+* @throws InvalidKeyException 
+*             if the key is not an RSA public key 
+* @throws NullPointerException 
+*             if the rawJSON is null 
+* @throws UnsupportedEncodingException 
+*/ 
+8 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+public static String encryptRawJSON(SecretKey aesKey, PublicKey 
+edmsServerPublicKey, String rawJSON) throws InvalidKeyException, 
+NullPointerException, UnsupportedEncodingException { 
+// --- create the RSA OAEP cipher --- 
+Cipher encryptionCipher; 
+OAEPParameterSpec oaepParameterSpec; 
+try { 
+// SHA-1 is the default and not vulnerable in this setting 
+// use OAEPParameterSpec to configure more than just the hash 
+encryptionCipher = Cipher.getInstance("RSA/ECB/OAEPWITHSHA
+256ANDMGF1PADDING"); 
+oaepParameterSpec = new OAEPParameterSpec("SHA-256", "MGF1", 
+MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT); 
+} catch (NoSuchAlgorithmException e) { 
+throw new RuntimeException("Runtime doesn't have support for RSA 
+cipher (mandatory algorithm for runtimes)", e); 
+} catch (NoSuchPaddingException e) { 
+throw new RuntimeException("Runtime doesn't have support for OAEP 
+padding (present in the standard Java runtime since XX)", e); 
+} 
+try { 
+encryptionCipher.init(Cipher.WRAP_MODE, edmsServerPublicKey, 
+oaepParameterSpec); 
+} catch (InvalidAlgorithmParameterException e1) { 
+System.out.println("Inside catch block of 
+InvalidAlgorithmParameterException"); 
+e1.getLocalizedMessage(); 
+e1.printStackTrace(); 
+} 
+// --- wrap the rawJSON in a buffer 
+// will throw NullPointerException if rawJSON is null 
+ByteBuffer rawJSONBuffer = ByteBuffer.wrap(rawJSON.getBytes("UTF-8")); 
+// --- wrap the new AES secret key --- 
+byte[] wrappedKey; 
+try { 
+9 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+wrappedKey = encryptionCipher.wrap(aesKey); 
+} catch (IllegalBlockSizeException e) { 
+throw new RuntimeException("AES key should always fit OAEP with normal 
+sized RSA key", e); 
+} 
+// --- setup the AES GCM cipher mode --- 
+Cipher aesGCM; 
+try { 
+aesGCM = Cipher.getInstance("AES/GCM/Nopadding"); 
+// we can get away with a zero nonce since the key is randomly 
+generated 
+// 128 bits is the recommended (maximum) value for the tag size 
+// 12 bytes (96 bits) is the default nonce size for GCM mode 
+encryption 
+GCMParameterSpec staticParameterSpec = new GCMParameterSpec(128, new 
+byte[12]); 
+aesGCM.init(Cipher.ENCRYPT_MODE, aesKey, staticParameterSpec); 
+} catch (NoSuchAlgorithmException e) { 
+throw new RuntimeException("Runtime doesn't have support for AES 
+cipher (mandatory algorithm for runtimes)", e); 
+} catch (NoSuchPaddingException e) { 
+throw new RuntimeException("Runtime doesn't have support for GCM 
+(present in the standard Java runtime since XX)", e); 
+} catch (InvalidAlgorithmParameterException e) { 
+throw new RuntimeException("IvParameterSpec not accepted by this 
+implementation of GCM", e); 
+} 
+// --- create a buffer of the right size for our own protocol --- 
+ByteBuffer ciphertextBuffer = ByteBuffer.allocate(Short.BYTES + 
+encryptionCipher.getOutputSize(128 / Byte.SIZE) 
++ aesGCM.getOutputSize(rawJSON.getBytes("UTF-8").length)); 
+// - element 1: make sure that we know the size of the wrapped key 
+ciphertextBuffer.putShort((short) wrappedKey.length); 
+// - element 2: put in the wrapped key 
+10 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+ciphertextBuffer.put(wrappedKey); 
+// - element 3: GCM encrypt into buffer 
+try { 
+aesGCM.doFinal(rawJSONBuffer, ciphertextBuffer); 
+} catch (Exception e) { 
+throw new RuntimeException("Cryptographic exception, AES/GCM 
+encryption should not fail here", e); 
+} 
+return Base64.encodeBase64String(ciphertextBuffer.array()); 
+} 
+Step V: Hit EDMS (Initiation Request) By Passing  "signedSenderTokenHash"  
+Field As Blank Initially Like ("signedSenderTokenHash", "") In Request 
+Header And encryptedUniqueSourceServerID Generated In Step IV In Request 
+Body:  
+Method: 
+SSLUtil.turnOffSSLChecking(); 
+String url = 
+"https://10.176.10.8/DMS_CBSCERT_API/services/SearchWs/SearchDoc"; 
+Client restClient = Client.create(); 
+WebResource webResource = restClient.resource(url); 
+ClientResponse resp = 
+webResource.type("application/json").header("signedSenderTokenHash", 
+"") 
+.post(ClientResponse.class, encryptedUniqueSourceServerID); 
+if (resp.getStatus() != 200) { 
+System.err.println("Unable to connect to the server"); 
+} 
+String output = resp.getEntity(String.class); 
+System.out.println("EDMS Response: " + output); 
+11 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+2. Now, EDMS will decrypt this encrypted request using AES-GCM algorithm and 
+generate receiverRandomKeyString (token) and store this token in its Database 
+against uniqueSourceServerID field with expiry time as 3 minutes and then, this 
+token will be encrypted with client’s public key (encReceiverAccessToken). Now, 
+Hash of this token is generated (receiverTokenHash). EDMS will use its private 
+key to sign this token hash. Now EDMS will send this encReceiverAccessToken 
+and signedReceiverTokenHash to the client in (,) comma separated form. 
+ Above Step Will Be Performed At EDMS End. 
+3. Client will receive encReceiverAccessToken and signedReceiverTokenHash in (,) 
+comma separated form. Client will decrypt this encReceiverAccessToken using its 
+private key (receiverAccessToken) and will generate hash of this decrypted token 
+(senderTokenHash). Now client will decrypt signedReceiverTokenHash using 
+EDMS public key and verify it with senderTokenHash. If both the hash matches 
+then the token is verified and processed for further operations. 
+EDMS Response:  
+SWHfRMWomw8lMIsj4fDUBsj+jlsu7uvCzcIY8Ux0aDBFGvw1CPTT8ZK3LvOwotm+
+B5WTCxg/uypu6jZU2f+/I5+l0+7Q5dV7aGH2wEGSmlgf1ZagqhAbGm8LQDYWiHX
+Z9xiscpzk0vZWPBTijBXIoL7YqebM2RXDwALvs1S3UDcVcYitxp4c9iEQLelU75YMwpq
+IitHd11FOcSpArQLJvJGU0VGzYAQ38e566Ea+yTDlz0m8vcrxv8g59giL5FyCpEaXQb
+YNRWiePEOGFQM/NicQk8UqmjxXsagMqKacHNg7VIhgBVKySWulZ+Dl3qiDeBYRoq
+2tVaVOXP+8sGIEvw== , 
+sNjHKG0hV2uh6qeTlFjbInu8+EpwNfSx/OR0g1pD8/sPc8k6rUPiAMf/kt3ZqGeBwtES
+WkiEYtoIl+rhNWWtm/uU94J4gURxUWCeXgNsGyM3DS9ppvFS5lo1mwwzAV8hdpvf
+HrtRxzPW+KstVRHS8Py4GOshZzdUY2MBG8KS5epwml1yOTDZeJtzRkwXLfxlscZfcK
+0X7CZ4rLflCOT0Z1Mi8g8tM5jHiGSJbLbJL0KMWL0HltUw4+wrQeM8pbsCp4IBTQXL
+HqMGG7IWjmdGD2ycG/WNRK9DxwByYjM+FbpieY8m/MzcYQMAOfYGvVYXZHMUn
+VlHVgRGSAcWrvmJ/bHUOFzqF7QZ9G5IYWsr3nJcTBlpQxLTXpArqLNECZIP6WCOLc
+uAra0wLGNFtgshVyVlFe3ZwSN6QMpT87Q/adPfro8Grkl0A1AbGRJrTMXsxwcT4y3sy
+5x+atLLbt/+rFfQ4e3fCdyQBrIot1UnHcIkvCDABVFVTuzA/j0v5EkTM3RZ8WurLUuR
+oFAJSLOdnJs0aMKH1QNHcnHVcenbEiWfVWYXThbn7QgKVQWMo5uFzQfMHb0+YuJ
+wygCkzuQ0sWJ1dHTRPr/4fUbbqfBKtMwqEG59PNPJ09cjlzMfVbGfmH2x9EebaT6aZj
+Nhlra082Cy9yk7dLFpYAnaTxCU+Tw= 
+Where, --->>> encReceiverAccessToken : 
+SWHfRMWomw8lMIsj4fDUBsj+jlsu7uvCzcIY8Ux0aDBFGvw1CPTT8ZK3LvOwotm+
+B5WTCxg/uypu6jZU2f+/I5+l0+7Q5dV7aGH2wEGSmlgf1ZagqhAbGm8LQDYWiHX
+Z9xiscpzk0vZWPBTijBXIoL7YqebM2RXDwALvs1S3UDcVcYitxp4c9iEQLelU75YMwpq
+IitHd11FOcSpArQLJvJGU0VGzYAQ38e566Ea+yTDlz0m8vcrxv8g59giL5FyCpEaXQb
+12 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+YNRWiePEOGFQM/NicQk8UqmjxXsagMqKacHNg7VIhgBVKySWulZ+Dl3qiDeBYRoq
+2tVaVOXP+8sGIEvw== --->>> signedReceiverTokenHash : 
+sNjHKG0hV2uh6qeTlFjbInu8+EpwNfSx/OR0g1pD8/sPc8k6rUPiAMf/kt3ZqGeBwtES
+WkiEYtoIl+rhNWWtm/uU94J4gURxUWCeXgNsGyM3DS9ppvFS5lo1mwwzAV8hdpvf
+HrtRxzPW+KstVRHS8Py4GOshZzdUY2MBG8KS5epwml1yOTDZeJtzRkwXLfxlscZfcK
+0X7CZ4rLflCOT0Z1Mi8g8tM5jHiGSJbLbJL0KMWL0HltUw4+wrQeM8pbsCp4IBTQXL
+HqMGG7IWjmdGD2ycG/WNRK9DxwByYjM+FbpieY8m/MzcYQMAOfYGvVYXZHMUn
+VlHVgRGSAcWrvmJ/bHUOFzqF7QZ9G5IYWsr3nJcTBlpQxLTXpArqLNECZIP6WCOLc
+uAra0wLGNFtgshVyVlFe3ZwSN6QMpT87Q/adPfro8Grkl0A1AbGRJrTMXsxwcT4y3sy
+5x+atLLbt/+rFfQ4e3fCdyQBrIot1UnHcIkvCDABVFVTuzA/j0v5EkTM3RZ8WurLUuR
+oFAJSLOdnJs0aMKH1QNHcnHVcenbEiWfVWYXThbn7QgKVQWMo5uFzQfMHb0+YuJ
+wygCkzuQ0sWJ1dHTRPr/4fUbbqfBKtMwqEG59PNPJ09cjlzMfVbGfmH2x9EebaT6aZj
+Nhlra082Cy9yk7dLFpYAnaTxCU+Tw= 
+Step I: Get Java PrivateKey Format From Your Private Key: 
+String priFilename="E:\\ClientRSAKeyPair\\ClientRSAKeyFile.key"; 
+PrivateKey privateKey = 
+ClientUtility.getPrivateKey(priFilename); 
+Method: 
+public static PrivateKey getPrivateKey(String priFilename) throws 
+Exception { 
+byte[] keyBytes = Files.readAllBytes(Paths.get(priFilename)); 
+PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes); 
+KeyFactory kf = KeyFactory.getInstance("RSA"); 
+return kf.generatePrivate(spec); 
+} 
+Step II: Decrypt Encrypted EDMS Token Received Using Java PrivateKey 
+Generated In Step I: 
+String encReceiverAccessToken = 
+"SWHfRMWomw8lMIsj4fDUBsj+jlsu7uvCzcIY8Ux0aDBFGvw1CPTT8ZK3LvOwotm+B5WTC
+xg/uypu6jZU2f+/I5+l0+7Q5dV7aGH2wEGSmlgf1ZagqhAbGm8LQDYWiHXZ9xiscpzk0vZ
+WPBTijBXIoL7YqebM2RXDwALvs1S3UDcVcYitxp4c9iEQLelU75YMwpqIitHd11FOcSpAr
+13 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+QLJvJGU0VGzYAQ38e566Ea+yTDlz0m8vcrxv8g59giL5FyCpEaXQbYNRWiePEOGFQM/Nic
+Qk8UqmjxXsagMqKacHNg7VIhgBVKySWulZ+Dl3qiDeBYRoq2tVaVOXP+8sGIEvw=="; 
+String receiverAccessToken = 
+ClientUtility.decReceiverAccessToken(privateKey, 
+encReceiverAccessToken); 
+System.out.println("receiverAccessToken : " + receiverAccessToken); 
+Method: 
+public static String decReceiverAccessToken(PrivateKey privateKey, 
+String encReceiverAccessToken) 
+throws InvalidKeyException, UnsupportedEncodingException, 
+IllegalBlockSizeException, BadPaddingException { 
+// --- create the RSA OAEP cipher --- 
+Cipher decryptionCipher; 
+OAEPParameterSpec oaepParameterSpec; 
+try { 
+// SHA-1 is the default and not vulnerable in this setting 
+// use OAEPParameterSpec to configure more than just the hash 
+decryptionCipher = Cipher.getInstance("RSA/ECB/OAEPWITHSHA
+256ANDMGF1PADDING"); 
+oaepParameterSpec = new OAEPParameterSpec("SHA-256", "MGF1", 
+MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT); 
+} catch (NoSuchAlgorithmException e1) { 
+throw new RuntimeException("Runtime doesn't have support for RSA 
+cipher (mandatory algorithm for runtimes)", e1); 
+} catch (NoSuchPaddingException e2) { 
+14 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+throw new RuntimeException("Runtime doesn't have support for OAEP 
+padding (present in the standard Java runtime since XX)", e2); 
+} 
+try { 
+decryptionCipher.init(2, privateKey, oaepParameterSpec); 
+} catch (InvalidAlgorithmParameterException e) { 
+System.out.println("Inside catch block of 
+InvalidAlgorithmParameterException"); 
+e.getLocalizedMessage(); 
+e.printStackTrace(); 
+} 
+byte[] tokenCipherTextBytes = 
+Base64.decodeBase64(encReceiverAccessToken.getBytes("UTF-8")); 
+byte[] decReceiverAccessTokenBytes = 
+decryptionCipher.doFinal(tokenCipherTextBytes); 
+return new String(decReceiverAccessTokenBytes); 
+} 
+Step III: Generate Hash Of EDMS Token Received From Step II: 
+String senderTokenHash = 
+ClientUtility.generateSenderTokenHash(receiverAccessToken); 
+System.out.println("senderTokenHash : " + senderTokenHash); 
+Method: 
+public static String generateSenderTokenHash(String 
+receiverAccessToken) 
+throws NoSuchAlgorithmException, UnsupportedEncodingException { 
+MessageDigest messageDigest = MessageDigest.getInstance("SHA-256"); 
+byte[] encodedSenderTokenHash = 
+messageDigest.digest(receiverAccessToken.getBytes("UTF-8")); 
+String senderTokenHash = 
+ClientUtility.bytesToHex(encodedSenderTokenHash); 
+return senderTokenHash; 
+15 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+} 
+private static String bytesToHex(byte[] encodedSenderTokenHash) { 
+StringBuffer hexString = new StringBuffer(); 
+for (int i = 0; i < encodedSenderTokenHash.length; i++) { 
+String hex = Integer.toHexString(0xff & encodedSenderTokenHash[i]); 
+if (hex.length() == 1) 
+hexString.append('0'); 
+hexString.append(hex); 
+} 
+return hexString.toString(); 
+} 
+Step IV: Now Pass Java PublicKey, Signed EDMS Token Hash And Generated 
+Hash Of EDMS Token From Step III For Verification Of EDMS Token Received 
+From Step II: 
+String signedReceiverTokenHash= 
+"sNjHKG0hV2uh6qeTlFjbInu8+EpwNfSx/OR0g1pD8/sPc8k6rUPiAMf/kt3ZqGeBwtESW
+kiEYtoIl+rhNWWtm/uU94J4gURxUWCeXgNsGyM3DS9ppvFS5lo1mwwzAV8hdpvfHrtRxzP
+W+KstVRHS8Py4GOshZzdUY2MBG8KS5epwml1yOTDZeJtzRkwXLfxlscZfcK0X7CZ4rLflC
+OT0Z1Mi8g8tM5jHiGSJbLbJL0KMWL0HltUw4+wrQeM8pbsCp4IBTQXLHqMGG7IWjmdGD2y
+cG/WNRK9DxwByYjM+FbpieY8m/MzcYQMAOfYGvVYXZHMUnVlHVgRGSAcWrvmJ/bHUOFzqF
+7QZ9G5IYWsr3nJcTBlpQxLTXpArqLNECZIP6WCOLcuAra0wLGNFtgshVyVlFe3ZwSN6QMp
+T87Q/adPfro8Grkl0A1AbGRJrTMXsxwcT4y3sy5x+atLLbt/+rFfQ4e3fCdyQBrIot1UnH
+cIkvCDABVFVTuzA/j0v5EkTM3RZ8WurLUuRoFAJSLOdnJs0aMKH1QNHcnHVcenbEiWfVWY
+XThbn7QgKVQWMo5uFzQfMHb0+YuJwygCkzuQ0sWJ1dHTRPr/4fUbbqfBKtMwqEG59PNPJ0
+9cjlzMfVbGfmH2x9EebaT6aZjNhlra082Cy9yk7dLFpYAnaTxCU+Tw="; 
+boolean hashMatched = 
+ClientUtility.verifyReceiverTokenHash(edmsServerPublicKey, 
+signedReceiverTokenHash, 
+16 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+senderTokenHash); 
+System.out.println("hashMatched ? : " + hashMatched); 
+Method: 
+public static boolean verifyReceiverTokenHash(PublicKey 
+edmsServerPublicKey, String signedReceiverTokenHash, 
+String senderTokenHash) 
+throws NoSuchAlgorithmException, InvalidKeyException, 
+SignatureException, UnsupportedEncodingException { 
+boolean hashMatched = false; 
+Signature publicSignature = Signature.getInstance("SHA256withRSA"); 
+publicSignature.initVerify(edmsServerPublicKey); 
+publicSignature.update(senderTokenHash.getBytes("UTF-8")); 
+byte[] signatureBytes = Base64.decodeBase64(signedReceiverTokenHash); 
+hashMatched = publicSignature.verify(signatureBytes); 
+return hashMatched; 
+} 
+4. Now client will sign senderTokenHash using its private key. Client now, sends 
+signedSenderTokenHash along with same unique ID stored in session or database 
+previously [comma (,) separated] in request header and will AES encrypt data 
+(actual request in JSON format) using AES-GCM algorithm and send the same in 
+request body to EDMS at once. 
+Step I: Sign Hash Of EDMS Token Using Java PrivateKey 
+String signedSenderTokenHash = 
+ClientUtility.signSenderTokenHash(privateKey, senderTokenHash); 
+System.out.println("signedSenderTokenHash : " + 
+signedSenderTokenHash); 
+Method: 
+17 
+        SBI EDMS                                                EDMS Source Authentication Detailed Flow And FAQs 
+18 
+ 
+public static String signSenderTokenHash(PrivateKey privateKey, String 
+senderTokenHash) 
+throws UnsupportedEncodingException, NoSuchAlgorithmException, 
+InvalidKeyException, SignatureException { 
+ 
+Signature privateSignature = Signature.getInstance("SHA256withRSA"); 
+ 
+privateSignature.initSign(privateKey); 
+ 
+privateSignature.update(senderTokenHash.getBytes("UTF-8")); 
+ 
+byte[] signature = privateSignature.sign(); 
+ 
+return Base64.encodeBase64String(signature); 
+ 
+} 
+ 
+Step II: Combine Signed Hash of EDMS Token and Unique ID in Comma (,) 
+Separated Form as Follows: 
+String signedSenderTokenHash = 
+"K8dOeMsMccd26O8Wdam9rMLew1kmvSY95uDh+H0F0pIUAn8Trdj9URkxg/yWf
+2KDqn+MSPD+vGuufzObXdxKe2mjjJhCDIRz8/gNH6OSFDqg3njxleJ1lLvOHDt
+gATUaiMS5/rmSHMxHB+ElytPPwmI5Gb3EAvwias+ihRad0GTIm17CyTHP6BBb5
+PUR3lnBLhSDh2aw1um6HSn/thajjIRChJVRM8o49dFoD/PzmwZPMA97b/W0leU
+35dMN3b8uFKdgiCooSiKswG96KWNMX+C2iVkSU3/KtRJfJ7smpLw3bqj8lx8Dg
+Ztl7rGqOVstU4LGu1sQ7o9bFngh+CLcxA==,jmXRDMX3kkPMZzYm"; 
+ 
+ 
+Step III: Pass AES (Secret) Key, Java PublicKey And Clear Text JSON Format 
+(Actual Request) Generated Below For Encryption: 
+String plainText = "{\r\n" +  
+    "  \"branchCode\": \"00437\",\r\n" +  
+    "  \"applicationID\": \"CBS\",\r\n" +  
+    "  \"uniqueIdentifier\": \"Folder_15\",\r\n" +  
+    "  \"documentID\": \"YCYU2L190545\",\r\n" +  
+    "  \"approvalFlag\": \"Y\",\r\n" +  
+    "  \"latestVersionFlag\": \"Y\",\r\n" +  
+    "  \"searchIdentifier\": \"documentID\"\r\n" +  
+    "}"; 
+String encryptedData = ClientUtility.encryptRawJSON(aesKey, 
+edmsServerPublicKey, plainText); 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+Method: 
+ Same as used previously. 
+Step IV: Hit EDMS Again In Same Session (Actual Request) By Passing 
+"signedSenderTokenHash"  Field Like ("signedSenderTokenHash”, 
+signedSenderTokenHash) Generated In Step II, In Request Header And 
+encryptedData Generated In Step III In Request Body:  
+Method: 
+SSLUtil.turnOffSSLChecking(); 
+String url = 
+"https://edmsckycst.sbi/DMS_SEARCH_API/services/SearchWs/SearchDocs "; 
+Client restClient = Client.create(); 
+WebResource webResource = restClient.resource(url); 
+ClientResponse resp = 
+webResource.type("application/json").header("signedSenderTokenHash",si
+gnedSenderTokenHash) 
+.post(ClientResponse.class, encryptedData); //  
+encryptedUniqueSourceServerID     
+encryptedData 
+if (resp.getStatus() != 200) { 
+System.err.println("Unable to connect to the server"); 
+} 
+String output = resp.getEntity(String.class); 
+System.out.println("EDMS Response: " + output); 
+5. EDMS will receive signedSenderTokenHash and encryptedData. As 
+signedSenderTokenHash field is a combination of Signed Hash of EDMS Token 
+and Unique ID in Comma (,) Separated Form, and this received field is split at 
+Comma (,), separating actual signedSenderTokenHash and Unique ID. Now, with 
+the help of Unique ID, checking of token is done in Database. If the token is 
+expired, the same is deleted from the database immediately and Token Expired 
+Error is given to the client. 
+19 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+ Above Step Will Be Performed At EDMS End. 
+6. Now, if the token is not expired, EDMS will decrypt actual 
+signedSenderTokenHash using client’s public key and verify it with 
+receiverTokenHash. If both the hash matches then the token is verified with the 
+original generated token stored in Database. Once verification is done and source 
+is authenticated successfully, encrypted data is AES decrypted and processed in 
+EDMS using AES-GCM algorithm. Now response generated is AES encrypted using 
+AES-GCM algorithm.  
+NOTE: Token stored in EDMS Database against uniqueSourceServerID field has 
+expiry time as 3 minutes. So upto 3 minutes you can send multiple requests with 
+same uniqueSourceServerID. But after 3 minutes token will be expired and the 
+same is deleted from the database automatically. After which you have to send 
+the initiation request again; this time with different uniqueSourceServerID and 
+the actual request as explained. 
+ Above Step Will Be Performed At EDMS End. 
+7. Now the response is sent to the client. Client decrypts the same using AES-GCM 
+algorithm and process it further. But, if both the hash doesn’t match, i.e. token 
+doesn’t match then the encrypted data is not decrypted At EDMS and Token 
+Mismatch Error is given to the client By EDMS. 
+String encryptedResponse = 
+"AQAcrvtF37YPhpKopRrDHuXaQeyz4F1/KYUPDjNYU3v9UuqgPzdxagoNYwwxE
+Mxoi7XM8x0uZkQXA4NZxDNUFXXB/uEtjHMszd1vpukBxyCh6V3+ScKXYtuhfu1
+HrOymJyPZDlynRBlVtpUHiDA6mxDC1rR80rsNaWeeJ0vP1bxV1yMp79X1P7xtp
+yOncD1DyLYNmLBmFn/nohnUWGs6B008YMzPrkR2k/MxksVCzY8nCfKtkof80H+
+V39/r2y614WQz8WxdcXc9dPHzn3ZYqlcRBAkSmkSIyYF492HpjDgrG8JlN1lou
+L5u9XQykZM3+HAYD4+Wp4RwH+lTrtM80e/OIoS2esvtXZdpU1hmMi3IEdn5POa
+pMid2rnWrjGFXrCug7BsNCdg9UMIzrY2PKaTV9nVJInyuhg2aXiyUGav/m5ToW
+ZtQoxtaxQyeFGQClCPBHsStHx2bne+tGH8TuvS5Dg/wuIxz6p5pW/JYoeSxs3A
+ZEWiqBZku5QXS5iKbC27gogPEm6Pf3SZSQabFQudMZ59EiuxO7KztVqLeAyWw0
+HKVx4/BGGwsabbo2QYEfmBzKDZzPM9D9Sj+cseoE8ljkxmMFfBJ0Mi1gEeH6aq
+SuWmSlImfLMKMW7f6JsNmK7Cd11g11LtB40K6qXso09s0+w2JfoS7KABSZGi+s
+thbXF/k2ds/FdqPdUYkd/q4DivP2ctuzLI="; 
+20 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+String decryptedResponse = 
+ClientUtility.decryptResponse(encryptedResponse, privateKey); 
+System.out.println("decryptedResponse : " + 
+decryptedResponse); 
+Method: 
+// Of course, encryption is not very useful without decryption.  
+Note that this will return minimal information if decryption fails. 
+/** 
+* Decrypts the ciphertext using a hybrid crypto-system which 
+uses GCM to 
+* encrypt the rawJSON and OAEP to encrypt the AES key. All the 
+default 
+* parameter choices are used for OAEP and GCM. 
+*  
+* @param privateKey 
+*            the RSA private key used to unwrap the AES key 
+* @param ciphertext 
+*            the ciphertext to be encrypted, not altered 
+* @return the decryptedResponse 
+* @throws InvalidKeyException 
+*             if the key is not an RSA private key 
+* @throws NullPointerException 
+*             if the ciphertext is null 
+* @throws IllegalArgumentException 
+*             with the message "Invalid ciphertext" if the 
+ciphertext is 
+*             invalid (minimize information leakage) 
+*/ 
+public static String decryptResponse(String encryptedResponse, 
+PrivateKey privateKey) 
+throws InvalidKeyException, NullPointerException, 
+UnsupportedEncodingException { 
+// --- create the RSA OAEP cipher --- 
+Cipher decryptionCipher; 
+OAEPParameterSpec oaepParameterSpec; 
+21 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+try { 
+// SHA-1 is the default and not vulnerable in this setting 
+// use OAEPParameterSpec to configure more than just the hash 
+decryptionCipher = Cipher.getInstance("RSA/ECB/OAEPWITHSHA
+256ANDMGF1PADDING"); 
+oaepParameterSpec = new OAEPParameterSpec("SHA-256", "MGF1", 
+MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT); 
+} catch (NoSuchAlgorithmException e) { 
+throw new RuntimeException("Runtime doesn't have support for RSA 
+cipher (mandatory algorithm for runtimes)", e); 
+} catch (NoSuchPaddingException e) { 
+throw new RuntimeException("Runtime doesn't have support for OAEP 
+padding (present in the standard Java runtime sinze XX)", e); 
+} 
+try { 
+decryptionCipher.init(Cipher.UNWRAP_MODE, privateKey, 
+oaepParameterSpec); 
+} catch (InvalidAlgorithmParameterException e1) { 
+System.out.println("Inside catch block of 
+InvalidAlgorithmParameterException"); 
+e1.getLocalizedMessage(); 
+e1.printStackTrace(); 
+} 
+byte[] encryptedBytes = 
+Base64.decodeBase64(encryptedResponse.getBytes("UTF-8")); 
+// --- wrap the ciphertext in a buffer 
+// will throw NullPointerException if ciphertext is null 
+ByteBuffer ciphertextBuffer = ByteBuffer.wrap(encryptedBytes); 
+// sanity check #1 
+if (ciphertextBuffer.remaining() < 2) { 
+throw new IllegalArgumentException("Invalid ciphertext"); 
+} 
+// - element 1: the length of the encapsulated key 
+int wrappedKeySize = ciphertextBuffer.getShort() & 0xFFFF; 
+22 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+// sanity check #2 
+if (ciphertextBuffer.remaining() < wrappedKeySize + 256 / Byte.SIZE) { 
+throw new IllegalArgumentException("Invalid ciphertext"); 
+} 
+// --- unwrap the AES secret key --- 
+byte[] wrappedKey = new byte[wrappedKeySize]; 
+// - element 2: the encapsulated key 
+ciphertextBuffer.get(wrappedKey); 
+SecretKey aesKey; 
+try { 
+aesKey = (SecretKey) decryptionCipher.unwrap(wrappedKey, "AES", 
+Cipher.SECRET_KEY); 
+} catch (NoSuchAlgorithmException e) { 
+throw new RuntimeException("Runtime doesn't have support for AES 
+cipher (mandatory algorithm for runtimes)", e); 
+} catch (InvalidKeyException e) { 
+throw new RuntimeException("Invalid ciphertext"); 
+} 
+// --- setup the AES GCM cipher mode --- 
+Cipher aesGCM; 
+try { 
+aesGCM = Cipher.getInstance("AES/GCM/Nopadding"); 
+// we can get away with a zero nonce since the key is randomly 
+// generated 
+// 128 bits is the recommended (maximum) value for the tag size 
+// 12 bytes (96 bits) is the default nonce size for GCM mode 
+// encryption 
+GCMParameterSpec staticParameterSpec = new GCMParameterSpec(128, new 
+byte[12]); 
+aesGCM.init(Cipher.DECRYPT_MODE, aesKey, staticParameterSpec); 
+23 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+} catch (NoSuchAlgorithmException e) { 
+throw new RuntimeException("Runtime doesn't have support for AES 
+cipher (mandatory algorithm for runtimes)", e); 
+} catch (NoSuchPaddingException e) { 
+throw new RuntimeException("Runtime doesn't have support for GCM 
+(present in the standard Java runtime sinze XX)", e); 
+} catch (InvalidAlgorithmParameterException e) { 
+throw new RuntimeException("IvParameterSpec not accepted by this 
+implementation of GCM", e); 
+} 
+// --- create a buffer of the right size for our own protocol --- 
+ByteBuffer rawJSONBuffer = 
+ByteBuffer.allocate(aesGCM.getOutputSize(ciphertextBuffer.remaining())
+); 
+// - element 3: GCM ciphertext 
+try { 
+aesGCM.doFinal(ciphertextBuffer, rawJSONBuffer); 
+} catch (Exception e) { 
+throw new RuntimeException("Invalid ciphertext"); 
+} 
+return new String(rawJSONBuffer.array()); 
+} 
+24 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+We have developed a JavaRESTClient to test our logic, solution details of which are 
+as below (Explained Step By Step in above Flow Section) 
+package com.tcs.main; 
+import java.security.PrivateKey; 
+import java.security.PublicKey; 
+import javax.crypto.SecretKey; 
+import com.sun.jersey.api.client.Client; 
+import com.sun.jersey.api.client.ClientResponse; 
+import com.sun.jersey.api.client.WebResource; 
+import com.tcs.security.ClientUtility; 
+import com.tcs.util.SSLUtil; 
+public class JavaRESTClient { 
+public static void main(String[] args) throws Exception { 
+SecretKey aesKey = ClientUtility.generateAESkey(); 
+String pubFilename = "E:\\ServerPublicKey\\STAppPublicKey.der"; 
+PublicKey edmsServerPublicKey = 
+ClientUtility.getPublicKey(pubFilename); 
+String uniqueSourceServerID = 
+"{\"applicationID\":\"CBS\",\"uniqueSourceServerID\":\"jmXRDMX3kkPMZzY
+m\"}"; 
+String encryptedUniqueSourceServerID = 
+ClientUtility.encryptRawJSON(aesKey, edmsServerPublicKey, 
+25 
+        SBI EDMS                                                EDMS Source Authentication Detailed Flow And FAQs 
+26 
+ 
+uniqueSourceServerID); 
+ 
+String plainText = "{\r\n" +  
+    "  \"branchCode\": \"00437\",\r\n" +  
+    "  \"applicationID\": \"CBS\",\r\n" +  
+    "  \"uniqueIdentifier\": \"Folder_15\",\r\n" +  
+    "  \"documentID\": \"YCYU2L190545\",\r\n" +  
+    "  \"approvalFlag\": \"Y\",\r\n" +  
+    "  \"latestVersionFlag\": \"Y\",\r\n" +  
+    "  \"searchIdentifier\": \"documentID\"\r\n" +  
+    "}"; 
+String encryptedData = ClientUtility.encryptRawJSON(aesKey, 
+edmsServerPublicKey, plainText); 
+ 
+String priFilename = "E:\\ClientRSAKeyPair\\ClientRSAKeyFile.key"; 
+ 
+PrivateKey privateKey = ClientUtility.getPrivateKey(priFilename); 
+ 
+String encReceiverAccessToken = ""; 
+ 
+String receiverAccessToken = 
+ClientUtility.decReceiverAccessToken(privateKey, 
+encReceiverAccessToken); 
+System.out.println("receiverAccessToken : " + receiverAccessToken); 
+ 
+String signedReceiverTokenHash = ""; 
+ 
+String senderTokenHash = 
+ClientUtility.generateSenderTokenHash(receiverAccessToken); 
+System.out.println("senderTokenHash : " + senderTokenHash); 
+ 
+boolean hashMatched = 
+ClientUtility.verifyReceiverTokenHash(edmsServerPublicKey, 
+signedReceiverTokenHash, 
+senderTokenHash); 
+System.out.println("hashMatched ? : " + hashMatched); 
+ 
+String signedSenderTokenHash = 
+ClientUtility.signSenderTokenHash(privateKey, senderTokenHash); 
+System.out.println("signedSenderTokenHash : " + 
+signedSenderTokenHash); 
+ 
+// String signedSenderTokenHash = ""; 
+ 
+SSLUtil.turnOffSSLChecking(); 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+String url = 
+"https://edmsckycst.sbi/DMS_SEARCH_API/services/SearchWs/SearchDocs"; 
+Client restClient = Client.create(); 
+WebResource webResource = restClient.resource(url); 
+ClientResponse resp = 
+webResource.type("application/json").header("signedSenderTokenHash", 
+"") 
+.post(ClientResponse.class, encryptedUniqueSourceServerID); // 
+encryptedUniqueSourceServerID 
+// encryptedData 
+if (resp.getStatus() != 200) { 
+System.err.println("Unable to connect to the server"); 
+} 
+String output = resp.getEntity(String.class); 
+System.out.println("EDMS Response: " + output); 
+String encryptedResponse = ""; 
+String decryptedResponse = 
+ClientUtility.decryptResponse(encryptedResponse, privateKey); 
+System.out.println("decryptedResponse : " + decryptedResponse); 
+} 
+} 
+NOTE: Kindly refer below updated libraries: 
+Updated Libraries 
+Can be downloaded from the SBI OneDrive link below: 
+https://sbionline
+my.sharepoint.com/:u:/g/personal/edmstcs_sp3_sbi_co_in/ERFyr00OYz5KrmGZk
+y8T0RsBlATQj9LCDkeYyZhJraQMew?e=f0gpLk 
+27 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+28 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+FAQs 
+1. Type of encoding used in public key and mode of exchange 
+Ans. From EDMS end Public Key will be in (DER) format. From your end Public Key 
+can be in (.pub) OR (DER) format. Mode of exchange will be email. 
+2.  Padding type used in RSA-OAEP and AES-GCM algorithm 
+Ans. For RSA-OAEP: OAEP WITH SHA-256 AND MGF1 PADDING 
+For AES-GCM: Nopadding 
+3.  Hashing algorithm used to compute hash. 
+Ans. SHA-256 
+4.  Algorithm used to sign/encrypt token hash by both the parties. 
+Ans. SHA256withRSA 
+29 
+SBI EDMS                                                
+EDMS Source Authentication Detailed Flow And FAQs 
+End of Document 
+30 
