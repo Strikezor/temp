@@ -1,0 +1,43 @@
+package com.tcs.bancs.microservices.response;
+
+import java.util.List;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class SearchResponseBean {
+    
+    private String responseCode;
+    private String responseMsg;
+    private String uniqueIdentifier;
+    private List<DocumentResponse> documents;
+
+    // Getters and Setters
+    public String getResponseCode() { return responseCode; }
+    public void setResponseCode(String responseCode) { this.responseCode = responseCode; }
+
+    public String getResponseMsg() { return responseMsg; }
+    public void setResponseMsg(String responseMsg) { this.responseMsg = responseMsg; }
+
+    public String getUniqueIdentifier() { return uniqueIdentifier; }
+    public void setUniqueIdentifier(String uniqueIdentifier) { this.uniqueIdentifier = uniqueIdentifier; }
+
+    public List<DocumentResponse> getDocuments() { return documents; }
+    public void setDocuments(List<DocumentResponse> documents) { this.documents = documents; }
+
+    // Inner class to handle the list of returned documents
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class DocumentResponse {
+        private String documentId;
+        private String documentName;
+        private String documentBase64; // The actual file content
+
+        public String getDocumentId() { return documentId; }
+        public void setDocumentId(String documentId) { this.documentId = documentId; }
+
+        public String getDocumentName() { return documentName; }
+        public void setDocumentName(String documentName) { this.documentName = documentName; }
+
+        public String getDocumentBase64() { return documentBase64; }
+        public void setDocumentBase64(String documentBase64) { this.documentBase64 = documentBase64; }
+    }
+}
