@@ -1,0 +1,331 @@
+package com.tcs.bancs.microservices.controller;
+
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.crypto.SecretKey;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.tcs.bancs.microservices.Encryption.EDMSEncryption;
+import com.tcs.bancs.microservices.request.TempReqBean;
+import com.tcs.bancs.microservices.utils.ReqRefGenerator;
+import com.tcs.bancs.microservices.utils.SSLUtil;
+
+@RestController
+@RequestMapping("/EDMS")
+public class EDMSSearch_Controller {
+    
+    private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSSearch_Controller.class);
+
+    private static String edmsSearchURL;
+    private static String hostPublic;
+    private static String privateKey_DigISign;
+    private static String DocumentPath;
+    private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
+
+    public EDMSSearch_Controller(
+            @Value("${EDMS_SEARCH_URL}") String edmsSearchURL,
+            @Value("${HOSTpublicKeyPath}") String hostPublic,
+            @Value("${PrivateKey_DigiSign}") String privateKey_DigISign,
+            @Value("${DocumentPath}") String DocumentPath) {
+        
+        EDMSSearch_Controller.edmsSearchURL = edmsSearchURL;
+        EDMSSearch_Controller.hostPublic = hostPublic;
+        EDMSSearch_Controller.privateKey_DigISign = privateKey_DigISign;
+        EDMSSearch_Controller.DocumentPath = DocumentPath;
+    }
+
+    @PostMapping(value = { "/EDMS_Search" }, produces = { "application/json" })
+    public ResponseEntity<String> EDMS_Search(
+            HttpServletRequest request, 
+            @RequestHeader HttpHeaders headers, 
+            HttpServletResponse response) {
+
+        // Hardcoded Document ID per requirements
+        String documentID = "X5OBDDML20987";
+        
+        // Setting standard security headers
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader("X-Frame-Options", "DENY");
+        response.setHeader("Content-Security-Policy", "default-src 'self'");
+        response.setHeader("X-XSS-Protection", "1;mode=block");
+        response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+        response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+        try {
+            String result = callEDMSSearchApi(documentID);
+            return new ResponseEntity<>(result, HttpStatus.OK);
+        } catch (Exception e) {
+            logger.error("Error occurred during EDMS Search", e);
+            return new ResponseEntity<>("Search Failed: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    public static String callEDMSSearchApi(String documentID) throws NoSuchProviderException {
+        PublicKey edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+        String uniqueCBSREPOServerID = EDMSEncryption.generateUniqueServerId();
+        SecretKey aesKey = EDMSEncryption.generateAESkey();
+        Gson gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
+
+        // ---------------------------------------------------------
+        // STEP 1: PREPARE AND SEND INITIATION REQUEST FOR TOKEN
+        // ---------------------------------------------------------
+        TempReqBean FirstReq = new TempReqBean();
+        FirstReq.setUniqueSourceServerID(uniqueCBSREPOServerID);
+        FirstReq.setApplicationID("AADESH_CBSDEV"); // Adjust as needed
+        String uniqueSourceServerIDJson = gson.toJson(FirstReq);
+
+        String encryptedUniqueSourceServerID = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey, uniqueSourceServerIDJson);
+
+        logger.info("First request preparation completed. Unique ID: {}", uniqueCBSREPOServerID);
+
+        try {
+            SSLUtil.turnOffSSLChecking();
+        } catch (NoSuchAlgorithmException | KeyManagementException e) {
+            logger.error("SSL configuration error", e);
+            return null;
+        }
+
+        String responseString;
+        try {
+            logger.info("--------------------------- First EDMS Search Call Started ---------------------------");
+            // Pass empty token as "signedSenderTokenHash" in header
+            responseString = sendPostRequest(edmsSearchURL, encryptedUniqueSourceServerID, "");
+            logger.info("---------------------------  First EDMS Search Call Ended  ---------------------------");
+        } catch (Exception e) {
+            logger.error("Failed to complete first EDMS Search call. Error: {}", e.getMessage(), e);
+            return null;
+        }
+
+        // ---------------------------------------------------------
+        // STEP 2: VERIFY AND DECRYPT RECEIVED TOKEN
+        // ---------------------------------------------------------
+        String[] tempResponse = responseString.split(",");
+        String encReceiverAccessToken = tempResponse[0];
+        String signedReceiverTokenHash = tempResponse[1];
+
+        PrivateKey privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+        String receiverAccessToken = EDMSEncryption.decReceiverAccessToken(privateKey, encReceiverAccessToken);
+        
+        String senderTokenHash = null;
+        try {
+            senderTokenHash = EDMSEncryption.generateSenderTokenHash(receiverAccessToken);
+        } catch (Exception e) {
+            logger.error("Error generating Sender Token Hash", e);
+            return null;
+        }
+
+        boolean hashMatched = false;
+        try {
+            hashMatched = EDMSEncryption.verifyReceiverTokenHash(edmsServerPublicKey, signedReceiverTokenHash, senderTokenHash);
+        } catch (Exception e) {
+            logger.error("Error verifying receiver token hash", e);
+            return null;
+        }
+
+        if (hashMatched) {
+            String signedSenderTokenHash = null;
+            try {
+                signedSenderTokenHash = EDMSEncryption.signSenderTokenHash(privateKey, senderTokenHash);
+            } catch (Exception e) {
+                logger.error("Error signing sender token hash", e);
+                return null;
+            }
+
+            // Append unique identifier mapped at the EDMS server side
+            String signedSenderTokenHashWithID = signedSenderTokenHash + "," + uniqueCBSREPOServerID;
+            signedSenderTokenHashWithID = signedSenderTokenHashWithID.replaceAll("\n", "");
+
+            logger.info("Token verification successful. Proceeding to fetch document.");
+
+            return processActualSearchRequest(signedSenderTokenHashWithID, documentID, gson);
+        } else {
+            logger.warn("Token verification failed for unique ID: {}", uniqueCBSREPOServerID);
+            return null;
+        }
+    }
+
+    private static String processActualSearchRequest(String signedSenderTokenHashWithID, String documentID, Gson gson) throws NoSuchProviderException {
+        // ---------------------------------------------------------
+        // STEP 3: PREPARE AND SEND ACTUAL ENCRYPTED SEARCH REQUEST
+        // ---------------------------------------------------------
+        SearchRequestBean searchReq = new SearchRequestBean();
+        searchReq.setBranchCode("61076"); // Adjust according to your application
+        searchReq.setApplicationID("AADESH_CBSDEV");
+        searchReq.setUniqueIdentifier(ReqRefGenerator.generate("E"));
+        searchReq.setDocumentID(documentID); 
+        searchReq.setApprovalFlag("Y");
+        searchReq.setLatestVersionFlag("Y");
+        searchReq.setSearchIdentifier("documentID");
+
+        String finalJSONReq = gson.toJson(searchReq);
+        logger.info("Final Search Request : {}", finalJSONReq);
+
+        SecretKey aesKey = EDMSEncryption.generateAESkey();
+        PublicKey edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+
+        String encryptedRequest = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey, finalJSONReq);
+        String finalResponseString = null;
+
+        try {
+            logger.info("--------------------------- Final EDMS Search Call Started ---------------------------");
+            finalResponseString = sendPostRequest(edmsSearchURL, encryptedRequest, signedSenderTokenHashWithID);
+            logger.info("---------------------------  Final EDMS Search Call Ended  ---------------------------");
+        } catch (Exception e) {
+            logger.error("Unable to fetch EDMS Search response: " + e.getMessage());
+            return null;
+        }
+
+        // ---------------------------------------------------------
+        // STEP 4: DECRYPT AND PROCESS THE EDMS RESPONSE
+        // ---------------------------------------------------------
+        PrivateKey privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+        String decryptedResponse = null;
+
+        if (finalResponseString != null && !finalResponseString.isEmpty()) {
+            try {
+                decryptedResponse = EDMSEncryption.decryptResponse(finalResponseString, privateKey);
+                logger.info("Final Search response decrypted successfully.");
+                
+                ObjectMapper mapper = new ObjectMapper();
+                Map<String, Object> responseMap = mapper.readValue(decryptedResponse, new TypeReference<Map<String, Object>>() {});
+                
+                // Assuming EDMS returns Base64 encoded string in a field called "documentBase64"
+                // Modify this field extraction according to the actual JSON schema from your EDMS search API
+                if (responseMap.containsKey("responseCode") && responseMap.get("responseCode").equals("00")) {
+                    String base64Doc = (String) responseMap.get("documentBase64");
+                    String docName = (String) responseMap.getOrDefault("documentName", documentID + "_downloaded.pdf");
+                    
+                    if(base64Doc != null) {
+                        decodeBase64ToFile(base64Doc, docName);
+                    }
+                }
+            } catch (Exception e) {
+                logger.error("Error processing decrypted search response", e);
+            }
+        }
+        return decryptedResponse;
+    }
+
+    private static String sendPostRequest(String url, String jsonBody, String token) throws IOException {
+        URL obj = new URL(url);
+        HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+
+        con.setRequestMethod("POST");
+        con.setRequestProperty("Content-Type", "application/json");
+        con.setRequestProperty("Accept", "application/json");
+
+        // Set the signedSenderTokenHash header 
+        con.setRequestProperty("signedSenderTokenHash", token);
+
+        con.setDoOutput(true);
+        con.setConnectTimeout(15000);
+        con.setReadTimeout(45000);
+
+        try (OutputStream os = con.getOutputStream()) {
+            byte[] input = jsonBody.getBytes(StandardCharsets.UTF_8);
+            os.write(input, 0, input.length);
+        }
+
+        int responseCode = con.getResponseCode();
+
+        if (responseCode != 200) {
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(con.getErrorStream(), StandardCharsets.UTF_8))) {
+                StringBuilder errorResponse = new StringBuilder();
+                String responseLine;
+                while ((responseLine = br.readLine()) != null) {
+                    errorResponse.append(responseLine.trim());
+                }
+                logger.error("HTTP Error Response: {}", errorResponse.toString());
+            }
+            throw new IOException("HTTP error code: " + responseCode);
+        }
+
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(con.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder response = new StringBuilder();
+            String responseLine;
+            while ((responseLine = br.readLine()) != null) {
+                response.append(responseLine.trim());
+            }
+            return response.toString();
+        }
+    }
+
+    private static void decodeBase64ToFile(String base64String, String fileName) {
+        try {
+            byte[] decodedBytes = Base64.getDecoder().decode(base64String);
+            // Ensure DestinationPath directory exists
+            File destDir = new File(destinationPath + "/Downloaded_Files/");
+            if (!destDir.exists()) {
+                destDir.mkdirs();
+            }
+            
+            Path destPath = Paths.get(destDir.getAbsolutePath() + "/" + fileName);
+            Files.write(destPath, decodedBytes);
+            logger.info("File successfully downloaded and saved to: {}", destPath.toString());
+            
+        } catch (IOException e) {
+            logger.error("Error decoding base64 to file", e);
+        }
+    }
+
+    // Inner class mapped to EDMS Search JSON Request properties
+    private static class SearchRequestBean {
+        private String branchCode;
+        private String applicationID;
+        private String uniqueIdentifier;
+        private String documentID;
+        private String approvalFlag;
+        private String latestVersionFlag;
+        private String searchIdentifier;
+
+        public String getBranchCode() { return branchCode; }
+        public void setBranchCode(String branchCode) { this.branchCode = branchCode; }
+
+        public String getApplicationID() { return applicationID; }
+        public void setApplicationID(String applicationID) { this.applicationID = applicationID; }
+
+        public String getUniqueIdentifier() { return uniqueIdentifier; }
+        public void setUniqueIdentifier(String uniqueIdentifier) { this.uniqueIdentifier = uniqueIdentifier; }
+
+        public String getDocumentID() { return documentID; }
+        public void setDocumentID(String documentID) { this.documentID = documentID; }
+
+        public String getApprovalFlag() { return approvalFlag; }
+        public void setApprovalFlag(String approvalFlag) { this.approvalFlag = approvalFlag; }
+
+        public String getLatestVersionFlag() { return latestVersionFlag; }
+        public void setLatestVersionFlag(String latestVersionFlag) { this.latestVersionFlag = latestVersionFlag; }
+
+        public String getSearchIdentifier() { return searchIdentifier; }
+        public void setSearchIdentifier(String searchIdentifier) { this.searchIdentifier = searchIdentifier; }
+    }
+}
