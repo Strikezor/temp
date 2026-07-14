@@ -446,3 +446,91 @@ public interface EDMS_REPO extends JpaRepository<EDMS_LOGS, String> {
 
 
 
+
+
+package com.tcs.bancs.microservices.response;
+
+import java.util.List;
+
+public class EDMS_Response {
+    
+    private String responseCode;
+    private String responseMsg;
+    private String uniqueIdentifier;
+    private List<NameIdBean> name_IdBeans;
+
+    // Getters and Setters
+    public String getResponseCode() {
+        return responseCode;
+    }
+
+    public void setResponseCode(String responseCode) {
+        this.responseCode = responseCode;
+    }
+
+    public String getResponseMsg() {
+        return responseMsg;
+    }
+
+    public void setResponseMsg(String responseMsg) {
+        this.responseMsg = responseMsg;
+    }
+
+    public String getUniqueIdentifier() {
+        return uniqueIdentifier;
+    }
+
+    public void setUniqueIdentifier(String uniqueIdentifier) {
+        this.uniqueIdentifier = uniqueIdentifier;
+    }
+
+    public List<NameIdBean> getName_IdBeans() {
+        return name_IdBeans;
+    }
+
+    public void setName_IdBeans(List<NameIdBean> name_IdBeans) {
+        this.name_IdBeans = name_IdBeans;
+    }
+
+    // Inner class to handle the array of document responses
+    public static class NameIdBean {
+        
+        private String uploadResponseCode;
+        private String documentName;
+        private String documentId;
+        private String uploadResponse;
+
+        // Getters and Setters
+        public String getUploadResponseCode() {
+            return uploadResponseCode;
+        }
+
+        public void setUploadResponseCode(String uploadResponseCode) {
+            this.uploadResponseCode = uploadResponseCode;
+        }
+
+        public String getDocumentName() {
+            return documentName;
+        }
+
+        public void setDocumentName(String documentName) {
+            this.documentName = documentName;
+        }
+
+        public String getDocumentId() {
+            return documentId;
+        }
+
+        public void setDocumentId(String documentId) {
+            this.documentId = documentId;
+        }
+
+        public String getUploadResponse() {
+            return uploadResponse;
+        }
+
+        public void setUploadResponse(String uploadResponse) {
+            this.uploadResponse = uploadResponse;
+        }
+    }
+}
