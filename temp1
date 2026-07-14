@@ -446,7 +446,7 @@ public class EDMSUpload_Controller {
 
 
 
-this is the upload controller, i want to implement the search controller which downloads the image uploaded through this, images are searched through the method described below it is just like this one, it also follows the 2 step archtecture where first we send a request to get the token and then we attach the token in the second request. Go through the data given below and create such search controller. Take the document id as hard coded string : "X5OBDDML20987" which i will change later. leave it as it is and pass it to through the method in parameter. Here is the documentation to refer to : 
+this is the upload controller, i want to implement the version controller which updates the new version of the image uploaded through this, images are updated through the method described below it is just like this one, it also follows the 2 step archtecture where first we send a request to get the token and then we attach the token in the second request along with the newer image. Go through the data given below and create such version update controller. Here is the documentation to refer to : 
 
 EDMS Source Authentication Detailed 
 Flow and FAQs 
@@ -1299,3 +1299,460 @@ SBI EDMS
 EDMS Source Authentication Detailed Flow And FAQs 
 End of Document 
 30 
+
+
+
+
+Additinally i have another document describing the udpdate functionality: 
+
+ 	
+
+API Specification Document
+EDMS Update Generic API- eDMS
+IR : XXXXXX 
+September, 2021, Version 1.0
+
+
+Module	Integration of SBI applications with eDMS
+Functionality	Integration of SBI applications using EDMS generic APIs (Upload, Update, Download and Soft Delete)
+Brief Description	Documents will be updated in the eDMS using Generic APIs. 
+ 
+
+
+
+
+Confidential
+This document is confidential and is given to you in confidence. You may only use the information it contains for the purpose it was provided. Access must be restricted to your employees and professional advisers who need access for the specified purpose. You must not otherwise disclose or use the information it contains except as required by law or where that information has lawfully become public knowledge.
+
+
+
+	
+
+
+Notice
+This is a controlled document. Unauthorised access, copying, replication or usage for a purpose other than for which it is intended, are prohibited.
+All trademarks that appear in the document have been used for identification purposes only and belong to their respective companies.
+
+
+Generic APIs - eDMS Development
+SBI Belapur, Navi Mumbai
+
+
+Document Revision or Change Control
+
+Customer: State Bank of India
+Project: SBI EDMS Single URL Generic APIs Development
+Document Name: API Specification Document
+
+Release Notice Reference (for release)
+Date	Version Number	TCS Associate Name	Reason for Change
+17/09/2021	1.0	          Amul Katta	Generic Update API
+
+
+
+Sign-off (If the IT is internal, customer’s sign-off may not be required)   
+
+Sign-off Stage	Sign-off Person	Name	Due Date
+Technical Sign off	TCS Dev. Team	Pooja Gangrade	
+
+ 
+About this Document
+Purpose
+The document gives a brief description of the API specification, the accepted parameters and the expected request/ response.
+
+
+Intended Audience
+SBI Application teams 
+APIs interaction with EDMS
+
+APIs interacting with EDMS should be encrypted and decrypted at both the ends with source authentication and RSA algorithm.  The request to the API is expected to be in JSON format. An encrypted response is advisable.
+Business acceptance scenario
+•	e-DMS API service integration with <Respective application> front end to update the uploaded documents.
+•	EDMS team will define and whitelist the application ID (according to different source applications and channels) at EDMS end.
+•	Re-upload & Update document will create a new version and always-new version will be retrieved on enquiry. 
+•	All the communication between source and destination will be done in encrypted format using source authentication logic and RSA algorithm. 
+•	Approach for Source Authentication (encryption/decryption logic) will not work with anything less than Java 8 version. 
+•	Metadata sanitization of uploaded file (Base64 content) will be done at EDMS end.
+•	Exif metadata from images will be removed and same is stored at EDMS end (Exif removed Base64 content). Also during search Exif removed base64 will be shown.
+•	As per ISD recommendations, EDMS is not allowing below special characters in document name for uploading-
+ !#$%&~'*+,/:;<=>?@^`|
+
+
+1.	Update document of EDMS
+Purpose:
+The purpose of the API is to update existing document, which can be done by uploading the document with the same parameters that were entered during initial upload. The documents update can be based on Document ID and Unique identifier / reference number. A latest version will be created and stored in eDMS. 
+
+“SBI application Name (ApplicationID) -> Unique identifier -> Documents”
+
+
+
+Assumption:
+•	To update the documents, applicationID and branch code is mandatory field. 
+•	Base64 string for all the documents should be provided in request.
+•	To update existing document, request string will consist of Branch code, Application ID,  Unique identifier / reference number which were entered during initial document upload along with Document ID generated by eDMS for that document.
+
+1.	Web Service Name:   VersionWs
+URL--------------------------------
+SIT-
+https://edmsckycst.sbi/DMS_VERSION_API/services/VersionWs/VersionDocs
+
+Request Parameter Data:
+Field	Mandatory/ Non Mandatory	Value	Max Length
+Unique identifier / Unique Reference number	Mandatory	Unique identifier / Unique Reference number	50
+Branch code	Mandatory	Branch code of user	5
+ApplicationID	Mandatory	<Respective applicationID> 
+For example: LOANS, YONO_CARLOAN etc.	50
+Document Name	Mandatory	Document Name	100
+Document ID	Mandatory	Document ID	
+Documents[]	Mandatory	Array of Multiple  documents	NA
+
+Sample request and response:
+
+
+Request	Response
+{
+"applicationID":"<respective applicationID>",
+"branchCode":"06730",
+"uniqueIdentifier":"Folder52",
+"documents":[{
+"base64":" cHMvY29yZS54bWxQSwECLQAUAAYACAAAACEAZVANZo0BAAAUAwAAEAAAAAAAAAAAAAAAAAD/GQAAZG9jUHJvcHMvYXBwLnhtbFBLBQYAAAAACgAKAIACAADCHAAAAAA=",
+"documentName":"RENAMED_SYY.xlsx",
+"documentID":"364XEP3K0328"
+}]
+}
+	decryptedResponse : {
+  "responseCode" : "08",
+  "responseMsg" : "RESPONSE FOR UPDATED DOCUMENTS",
+  "uniqueIdentifier" : "Folder52",
+  "name_IdBeans" : [ {
+    "uploadResponseCode" : "00",
+    "documentName" : "RENAMED_SYY.xlsx",
+    "documentId" : "364XEP3K0328",
+    "uploadResponse" : "DOCUMENT UPDATED SUCCESSFULLY"
+  } ]
+}
+
+
+
+
+
+Initiation PlainText JSON Request:
+“SBI application Name (ApplicationID) 
+String uniqueSourceServerID = "{\"applicationID\":\"ApplicationID\",\" uniqueSourceServerID\":\"dba5c0b4b2f95b43 \"}";
+
+
+Encrypted request and response:
+                              Request 
+	Response
+PART - I
+
+Request Header:
+
+Initially, For client initiation request send following field as blank :
+    "signedSenderTokenHash", ""
+
+Request Body:
+
+String encryptedUniqueNumber :
+AgBP34UnWoaEa+yRIARy2/7lSVAWfTSN4mARgWPHpwyQdHt12Q53lm3514QgZLrCpR5VdETQmnA5
+urliEHTJGgd/oisjFAef/Uwonl8k3Y/Kxb3uh8ewgbIptosy2/pS1ZvTELn+Cg4ea6o+wuHJaukR
+78M/Uq8w+GbDPzjKqUYa1RSicgtBzvc9bABklPKymoo+L4kgArhBm0upzsqO6WU22UB1UZMCF+O3
+SDSyN0zjclFTfVBMZwUTYkF9FrDboloLu8tFo9MyTzpr5S8WuFR5OoGopL1UX60eNTRHLyj7zvfy
+R8dGRl92Sbg/k1TsZGij0Fw3FqMcP7k4ubgpgLMiKAszFWwdZa+MXTxdTFCfYHxc7SBqYBl8v4kw
+mtHjv0EKx5sWjMUfkFrfx3T+1sDUwW9l8mXAuNWulOAPxCuCVSffONMzJ6gK2zLqfgOKtFsn1R0g
+x9iLVxWkedQivctNBZGrIbsFprOxd0t9XyF7HdwivXds1f9gomirgF8lIzQxXnWbcjfzDkt5DSHh
+bI9gzA2s++CMmZZLPLLgH+AxsKALUWtdunG/WtCiZ46eD/Cu37iNBIX6BO17hEaO5cQ0PN0gnCf9
+qah26RrarqYqP1QRsbP1kgOKI/QjZhVq+5V6su5dbkMRS0Zxyxeh1px2B4Sr/j15T+8OB5D+4nma
+/+NaD9NzzssXixymyRGS7hZKC2/jDRPTak/95ijyrG4NPwAKQCNA3N58NLxq9E+tqaQ0eEfmiYlV
+FnZg8gXxTJ6RggLa35xgflGhsBCKNJjmsQ== 
+
+	PART - I
+
+After client initiation request is received, server generates following response
+
+String response = encReceiverAccessToken , signedReceiverTokenHash
+
+Where, 
+
+String encReceiverAccessToken :
+
+NEr5od4ZlFhYODBoKOAdBZ24yooc7rIxc//XneK9lSGJRusB4kBmyVDaqXJ6KpaA4GQHn2QlAkL/OV7gwtA9+sBxmS28+45eiyRCszabLjlpHBOLwKbtZwSYegRxm+ECsziTDQ6pyVxxLCNyPC1uivkwgiUp78IPYQm00hMV5Y4OMwq9DWGBOiKi+Eb8YrLkNC3mBn/+WA26PAi83EGuiPekMn8jE6uthGpZ3w4h/yWEnk26SFCFUG5bd4sR2jHY5YrTBcYUGvscBDg3NJzImOIxVwTaBb4ivTp7p0Mab0sgyGDgtlxXGwcsn9Qef7bVCmOQrh8CKpqa7vFISFjORg== 
+
+String signedReceiverTokenHash :
+
+
+HBeXleiqaBZUcqMa9xQUuSSkxyt/AAOsJOvF/GKN0g1MiOSdEilTRrsDCSS968xMnf0wPlIfnfogcTcwdl/dEkryuc0Xo/jyafCL2teQMZmQ1WhyED58habWrcDSsAyCsSgxvqQnQhDYA4PM9eSCR7ao3p6+nOiZW4TcWQWjQq4AODpvvCtJTP8YIi7cjhXYoRVQsWM2kE6cpqqDv+1IDxSCg4RoFTjwskf6OM9AnouJ6pK7bMcUwbVxBqLbihPEHRWTzvQCpck8TcsSTbXFI5hIDioY88RKfB1xY/rKEjrQVa+lhB5VkjWFnxFZYhGOEd7KccX8InK/mVo+sT6NkQ2MXX2APl77BZvEJ387H8UN7C1G6HwUwXiWmetj57SvD+yoNJab/IdAhE7OOv5niati7p3xz33r4TMYIRMFz5c5q20lASFsXMKHfdndEiNW/6r2al6A8sVyQZiRjiZQtea9ju28f9TaJ6i1/5h4lXR/5O7ia6XMyhDy9bS7cn9v+eo2bhF/UMhz1tw0ttlOHtPE3uBxTtyqeBLhCuhsB8+Ohf9A2a12EZVLyY14evyGuItSY3jq/BfwFSF3zlTPN3odcVZdGtlKlvFs0aoQZM0Xe9u/Fus7zmcWITfAovIS0mtqL4HObt6zzsjGrWTAwqaOgwNok5abLU9hCGnW31s= 
+
+
+
+
+
+Request	Response
+
+PART – II
+
+Request Header:
+
+"signedSenderTokenHash", signedSenderTokenHash
+
+signedSenderTokenHash :
+
+jLaEyVN4ozFKRsui2N1wXgvBWOUBglfnWGxQ5GAJDIeIPxfQ7Z+hsHELFQKWJD61G7wDwA2lEJMYd7YBX1QF/R+KmlIXqK3evdKrbOkcsatAivGYVmisKzXx825LG/iMwhRRTf0dw+EQIgavWhc0uWBFjFV1X0Ztt+Row2iyHtMKp2YKUsGHSZot8+YmY5Thyas1V4s+H3cb7d+Ij3/DC7xnxMlVwkGqpQcNmBrGNk65ot8k9K6TRJTuN51FVs6sxdow8EsPiBGj3OdirhgZO8mRzWpYmrhB5JT5EEjjCQ/JV4AT3I/oyBmYWx/gx6Abo0xRaVsc/w5rqn7H/meNdQ==,dba5c0b4b2f95b43 
+Where,
+
+String actualsignedSenderTokenHash :
+
+jLaEyVN4ozFKRsui2N1wXgvBWOUBglfnWGxQ5GAJDIeIPxfQ7Z+hsHELFQKWJD61G7wDwA2lEJMYd7YBX1QF/R+KmlIXqK3evdKrbOkcsatAivGYVmisKzXx825LG/iMwhRRTf0dw+EQIgavWhc0uWBFjFV1X0Ztt+Row2iyHtMKp2YKUsGHSZot8+YmY5Thyas1V4s+H3cb7d+Ij3/DC7xnxMlVwkGqpQcNmBrGNk65ot8k9K6TRJTuN51FVs6sxdow8EsPiBGj3OdirhgZO8mRzWpYmrhB5JT5EEjjCQ/JV4AT3I/oyBmYWx/gx6Abo0xRaVsc/w5rqn7H/meNdQ==
+
+ String uniqueSourceServerID :
+
+dba5c0b4b2f95b43 
+
+Request Body:
+
+String encryptedData :
+
+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	
+PART – II
+
+StringencryptedResponseData :
+
+AQAmHk+08cShX5qQRjd0luoEMysmuUTTKX5ddQOAdVcV5OEbjl4qj2kEkbGh1PLp4LX8ZxsoANhbGjmd58aVBpPX966Nj8Q8HPialZwTVi7QVApxOQnzhAvMwPndQYOcYPqbMZ4pBLtZn1FIzeF6r3iw9r2IqWEnynQkuDlVXfdTUMXsJmk+Y721iZ1FwYq+xxSuwNv0KtfG0n/Pk1mFH2vlawUAaFJ9JzroKKHx3VinODe1KyAr9IHzjkXcM/0qj/6jSXvxhk0qOcWYrp0nX/SkoFyHc8M/9owpFDTcgc/Uzet9mND0WrrZyHg49w4N8HsiJ4BfAN8FDgyUKaUEPwYr0ySyA6rcoCCkY5k/QYjXrV+I86DS12cajq46kVvC8zdGQWYWWUtGk0XbLY6sYYp9/kIr0tBWX386hiqqPULAraXGKe0IA0inp0siCPoipvRjWZhiN9L+YcLIJVw6Zvq4VeBJLfykmYkJb1NDIa3nhCfGOpJ8aJOuxuysdH3mUXds5RIVUuU54NNgA0PsfujgRfF3Wiva69bX0TYUi8v1xJid5vm5WVSOgyF4GbojhhYT6QWxn4wzKZzeIwI16lEhDxK99ce2GuvADUZeN6LCemrDN+BQis4yRsQ0+EhhrW75LOiD1LT4a0kUlZel+kYum9GocY9nihuIvLGe+Jbd4qvCaEymdF1azc7HVSx68iBxVEthJM1FQyZLi/6dkTtZFsKekNPCvTZ7rK/hxIW9QWxBonCOo+HHJbiPc40sMZVbwTK3
+
+
+
+Response Messages with Codes:
+Response Message	Response Code
+DOCUMENT UPDATED SUCCESSFULLY	00
+RESPONSE FOR UPLOADED DOCUMENTS	08
+REQUIRED DATA IS ABSENT	50
+FAIL TO CONNECT TO DMS	100
+FOLDER CREATION FAILED	250
+DECRYPTION FAILED	111
+EXCEPTION OCCURED	406
+WRONG JSON INPUT	425
+ERROR IN DECODING	421
+PLEASE RE-UPLOAD DOCUMENTS	452
+THE USER IS NOT AUTHORISED	465
+MANDATORY FIELD IS MISSING	900
+INVALID APPLICATIONID	901
+BASE64 IS BLANK	907
+FILE TYPE MISMATCH	908
+DOCUMENT NAME EXTENSION MUST BE REQUIRED	910
+TOKEN EXPIRED. KINDLY HIT THE API AGAIN FROM START	458
+TOKENS DOES NOT MATCH, UNAUTHENTIC SOURCE	457
+MAXIMUM LENGTH FOR UNIQUE IDENTIFIER IS 50	945
+PLEASE SELECT PROPER URL WHICH IS USED AT THE TIME OF SERVER AUTHENTICATION	144
+INCORRECT PARAMETER FIELD PRESENT IN REQUEST	933
+UNAUTHORISED CHANNEL OR WRONG TOKEN ID	888
+REPEATED PARAMETER FIELD PRESENT IN REQUEST	914
+
+
+
+
+Note: Request and responses mentioned above are sample request- response just to indicate the format
+
+
+                             
+                                    
+                                              END OF THE DOCUMENT
+
