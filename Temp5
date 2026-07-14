@@ -1,0 +1,448 @@
+package com.tcs.bancs.microservices.controller;
+
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.crypto.SecretKey;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+
+import com.tcs.bancs.microservices.Encryption.EDMSEncryption;
+import com.tcs.bancs.microservices.db.model.EDMS_LOGS;
+import com.tcs.bancs.microservices.repository.EDMS_REPO;
+import com.tcs.bancs.microservices.request.TempReqBean;
+import com.tcs.bancs.microservices.request.VersionDocumentList;
+import com.tcs.bancs.microservices.request.VersionRequestBean;
+import com.tcs.bancs.microservices.request.VersionUpdateRequest;
+import com.tcs.bancs.microservices.response.EDMS_Response;
+import com.tcs.bancs.microservices.utils.ReqRefGenerator;
+import com.tcs.bancs.microservices.utils.SSLUtil;
+
+@RestController
+@RequestMapping("/EDMS")
+public class EDMSVersion_Controller {
+	private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSVersion_Controller.class);
+	
+	private static EDMS_REPO edms_REPO;
+	private static String edmsVersionURL = null;
+	private static String hostPublic = null;
+	private static String privateKey_DigISign = null;
+	private static String DocumentPath = null;
+	private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
+
+	public EDMSVersion_Controller(
+			@Value("${EDMS_VERSION_URL}") String edmsVersionURL,
+			@Value("${HOSTpublicKeyPath}") String hostPublic,
+			@Value("${PrivateKey_DigiSign}") String privateKey_DigISign,
+			@Value("${DocumentPath}") String DocumentPath, 
+			EDMS_REPO edms_REPO) {
+		EDMSVersion_Controller.edmsVersionURL = edmsVersionURL;
+		EDMSVersion_Controller.hostPublic = hostPublic;
+		EDMSVersion_Controller.privateKey_DigISign = privateKey_DigISign;
+		EDMSVersion_Controller.DocumentPath = DocumentPath;
+		EDMSVersion_Controller.edms_REPO = edms_REPO;
+	}
+
+	@PostMapping(value = { "/EDMS_Version_Update" }, produces = { "application/json" })
+	public ResponseEntity<String> EDMS_Version_Update(
+			@RequestBody VersionUpdateRequest incomingReq,
+			HttpServletRequest request, 
+			@RequestHeader HttpHeaders headers, 
+			HttpServletResponse response) throws NoSuchProviderException {
+
+		response.setHeader("X-Content-Type-Options", "nosniff");
+		response.setHeader("X-Frame-Options", "DENY");
+		response.setHeader("Content-Security-Policy", "default-src 'self'");
+		response.setHeader("X-XSS-Protection", "1;mode=block");
+		response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+		response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+		File documentFile = new File(DocumentPath + "/" + incomingReq.getDocumentName());
+		
+		if (!documentFile.exists()) {
+			logger.error("Document not found in path: {}", documentFile.getAbsolutePath());
+			return ResponseEntity.badRequest().body("File not found locally.");
+		}
+
+		String base64doc = encodeFileToBase64(documentFile);
+		
+		EDMS_Response result = callEDMSVersionApi(base64doc, incomingReq);
+
+		if (result != null) {
+			return ResponseEntity.ok("Update Processed. Check Logs.");
+		} else {
+			return ResponseEntity.internalServerError().body("Failed to update version in EDMS.");
+		}
+	}
+
+	public static EDMS_Response callEDMSVersionApi(String base64Document, VersionUpdateRequest reqData)
+			throws NoSuchProviderException {
+		
+		PublicKey edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+
+		String uniqueCBSREPOServerID = EDMSEncryption.generateUniqueServerId();
+		SecretKey aesKey = EDMSEncryption.generateAESkey();
+		Gson gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
+
+		VersionRequestBean request = new VersionRequestBean();
+		request.setApplicationID(reqData.getApplicationID());
+		request.setBranchCode(reqData.getBranchCode());
+		request.setUniqueIdentifier(reqData.getUniqueIdentifier());
+		
+		List<VersionDocumentList> list = new ArrayList<>();
+		VersionDocumentList requestDoc = new VersionDocumentList();
+		requestDoc.setBase64(base64Document);
+		requestDoc.setDocumentName(reqData.getDocumentName());
+		requestDoc.setDocumentID(reqData.getDocumentID());
+		list.add(requestDoc);
+		
+		request.setDocuments(list);
+
+		TempReqBean FirstReq = new TempReqBean();
+		FirstReq.setUniqueSourceServerID(uniqueCBSREPOServerID);
+		FirstReq.setApplicationID(reqData.getApplicationID());
+		String uniqueSourceServerID = gson.toJson(FirstReq);
+
+		String encryptedUniqueSourceServerID = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey, uniqueSourceServerID);
+
+		logger.info("Initiation request preparation completed. Unique ID: {}", uniqueCBSREPOServerID);
+
+		try {
+			SSLUtil.turnOffSSLChecking();
+		} catch (NoSuchAlgorithmException | KeyManagementException e) {
+			logger.error("SSL configuration error", e);
+			return null;
+		}
+
+		String responseString = null;
+		try {
+			logger.info("--------------------------- First EDMS Version Call Started ---------------------------");
+			responseString = sendPostRequest(edmsVersionURL, encryptedUniqueSourceServerID, "");
+			logger.info("--------------------------- First EDMS Version Call Ended ---------------------------");
+		} catch (Exception e) {
+			logger.error("UNABLE TO FETCH EDMS INITIATION RESPONSE: " + e.getMessage(), e);
+			return null;
+		}
+
+		String[] tempResponse = responseString.split(",");
+		String encReceiverAccessToken = tempResponse[0];
+		String signedReceiverTokenHash = tempResponse[1];
+
+		PrivateKey privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+		String receiverAccessToken = EDMSEncryption.decReceiverAccessToken(privateKey, encReceiverAccessToken);
+		String senderTokenHash = EDMSEncryption.generateSenderTokenHash(receiverAccessToken);
+
+		boolean hashMatched = EDMSEncryption.verifyReceiverTokenHash(edmsServerPublicKey, signedReceiverTokenHash, senderTokenHash);
+		
+		if (hashMatched) {
+			String signedSenderTokenHash = EDMSEncryption.signSenderTokenHash(privateKey, senderTokenHash);
+			String signedSenderTokenHashWithID = (signedSenderTokenHash + "," + uniqueCBSREPOServerID).replaceAll("\n", "");
+			
+			logger.info("Token verification successful. Proceeding to send Update payload.");
+			return reuseTokenForVersion(signedSenderTokenHashWithID, request, gson, edmsVersionURL, aesKey, edmsServerPublicKey, privateKey);
+		} else {
+			logger.warn("Token verification failed for unique ID: {}", uniqueCBSREPOServerID);
+		}
+
+		return null;
+	}
+
+	private static EDMS_Response reuseTokenForVersion(String signedSenderTokenHashWithID, VersionRequestBean request, Gson gson,
+			String url, SecretKey aesKey, PublicKey publicKey, PrivateKey privateKey) {
+
+		EDMS_Response finalResponse = new EDMS_Response();
+		String decryptedResponse = null;
+		String finalJSONReq = gson.toJson(request);
+
+		logger.info("Final Version Request JSON constructed for Document ID: {}", request.getDocuments().get(0).getDocumentID());
+
+		String encryptedRequest = EDMSEncryption.encryptRawJSON(aesKey, publicKey, finalJSONReq);
+
+		String finalResponseString = null;
+		try {
+			logger.info("--------------------------- Final EDMS Version Call Started ---------------------------");
+			finalResponseString = sendPostRequest(url, encryptedRequest, signedSenderTokenHashWithID);
+			logger.info("--------------------------- Final EDMS Version Call Ended ---------------------------");
+		} catch (Exception e) {
+			logger.error("UNABLE TO FETCH FINAL EDMS VERSION RESPONSE: " + e.getMessage(), e);
+			return null;
+		}
+
+		if (finalResponseString != null && !finalResponseString.isEmpty()) {
+			decryptedResponse = EDMSEncryption.decryptResponse(finalResponseString, privateKey);
+			Map<String, Object> responseMap = new HashMap<>();
+			ObjectMapper mapper = new ObjectMapper();
+			try {
+				responseMap = mapper.readValue(decryptedResponse, new TypeReference<Map<String, Object>>() {});
+			} catch (JsonProcessingException e) {
+				logger.error("Error parsing JSON response: " + e.getMessage());
+			}
+
+			logger.info("Final decrypted response: {}", decryptedResponse);
+			List<Map<String, Object>> nameIdBeans = (List<Map<String, Object>>) responseMap.get("name_IdBeans");
+			String uniqueIdentifier = (String) responseMap.get("uniqueIdentifier");
+
+			if (nameIdBeans != null && !nameIdBeans.isEmpty()) {
+				String uploadResponseCode = (String) nameIdBeans.get(0).get("uploadResponseCode");
+				String documentName = (String) nameIdBeans.get(0).get("documentName");
+				
+				if ("00".equals(uploadResponseCode) || "809".equals(uploadResponseCode)) {
+					moveFile(documentName, "/Success_Files/");
+					
+					EDMS_LOGS edmsLogs = new EDMS_LOGS();
+					edmsLogs.setBRANCH_CODE(request.getBranchCode());
+					edmsLogs.setID((String) nameIdBeans.get(0).get("documentId"));
+					edmsLogs.setNAME(documentName);
+					edmsLogs.setRESPONSE_CODE(uploadResponseCode);
+					edmsLogs.setRESPONSE_MESSAGE((String) nameIdBeans.get(0).get("uploadResponse"));
+					edmsLogs.setUNIQUE_IDENTIFIER(uniqueIdentifier);
+					edmsLogs.setUPLOAD_DATE(LocalDate.now());
+					edmsLogs.setFILE_TYPE("Image_Version");
+					
+					edms_REPO.save(edmsLogs);
+				} else {
+					logger.error("Update failed for document: {} with code: {}", documentName, uploadResponseCode);
+					moveFile(documentName, "/Failure_Files/");
+				}
+			}
+		}
+		
+		finalResponse = gson.fromJson(decryptedResponse, EDMS_Response.class);
+		return finalResponse;
+	}
+
+	private static void moveFile(String documentName, String targetFolder) {
+		String path = DocumentPath + "/" + documentName;
+		Path src = Paths.get(path);
+		Path desti = Paths.get(destinationPath + targetFolder + documentName);
+		try {
+			Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+		} catch (IOException e) {
+			logger.error("Error moving file: " + e.getMessage());
+		}
+	}
+
+	private static String sendPostRequest(String url, String jsonBody, String token) throws IOException {
+		URL obj = new URL(url);
+		HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+		con.setRequestMethod("POST");
+		con.setRequestProperty("Content-Type", "application/json");
+		con.setRequestProperty("Accept", "application/json");
+		con.setRequestProperty("signedSenderTokenHash", token);
+		con.setDoOutput(true);
+		con.setConnectTimeout(15000);
+		con.setReadTimeout(45000);
+
+		try (OutputStream os = con.getOutputStream()) {
+			byte[] input = jsonBody.getBytes(StandardCharsets.UTF_8);
+			os.write(input, 0, input.length);
+		}
+
+		int responseCode = con.getResponseCode();
+		if (responseCode != 200) {
+			try (BufferedReader br = new BufferedReader(new InputStreamReader(con.getErrorStream(), StandardCharsets.UTF_8))) {
+				StringBuilder errorResponse = new StringBuilder();
+				String responseLine;
+				while ((responseLine = br.readLine()) != null) {
+					errorResponse.append(responseLine.trim());
+				}
+				logger.error("HTTP Error Response: {}", errorResponse.toString());
+			}
+			throw new IOException("HTTP error code: " + responseCode);
+		}
+
+		try (BufferedReader br = new BufferedReader(new InputStreamReader(con.getInputStream(), StandardCharsets.UTF_8))) {
+			StringBuilder response = new StringBuilder();
+			String responseLine;
+			while ((responseLine = br.readLine()) != null) {
+				response.append(responseLine.trim());
+			}
+			return response.toString();
+		}
+	}
+
+	private static String encodeFileToBase64(File file) {
+		try {
+			byte[] fileContent = Files.readAllBytes(file.toPath());
+			return Base64.getEncoder().encodeToString(fileContent);
+		} catch (IOException e) {
+			throw new IllegalStateException("Could not read file " + file, e);
+		}
+	}
+}
+
+
+
+
+
+
+package com.tcs.bancs.microservices.request;
+
+public class VersionUpdateRequest {
+    private String applicationID;
+    private String branchCode;
+    private String uniqueIdentifier;
+    private String documentName;
+    private String documentID;
+
+    public String getApplicationID() { return applicationID; }
+    public void setApplicationID(String applicationID) { this.applicationID = applicationID; }
+    
+    public String getBranchCode() { return branchCode; }
+    public void setBranchCode(String branchCode) { this.branchCode = branchCode; }
+    
+    public String getUniqueIdentifier() { return uniqueIdentifier; }
+    public void setUniqueIdentifier(String uniqueIdentifier) { this.uniqueIdentifier = uniqueIdentifier; }
+    
+    public String getDocumentName() { return documentName; }
+    public void setDocumentName(String documentName) { this.documentName = documentName; }
+    
+    public String getDocumentID() { return documentID; }
+    public void setDocumentID(String documentID) { this.documentID = documentID; }
+}
+
+
+
+
+
+version update req bean
+
+package com.tcs.bancs.microservices.request;
+
+import java.util.List;
+
+public class VersionRequestBean {
+    private String applicationID;
+    private String branchCode;
+    private String uniqueIdentifier;
+    private List<VersionDocumentList> documents;
+
+    public String getApplicationID() { return applicationID; }
+    public void setApplicationID(String applicationID) { this.applicationID = applicationID; }
+    
+    public String getBranchCode() { return branchCode; }
+    public void setBranchCode(String branchCode) { this.branchCode = branchCode; }
+    
+    public String getUniqueIdentifier() { return uniqueIdentifier; }
+    public void setUniqueIdentifier(String uniqueIdentifier) { this.uniqueIdentifier = uniqueIdentifier; }
+    
+    public List<VersionDocumentList> getDocuments() { return documents; }
+    public void setDocuments(List<VersionDocumentList> documents) { this.documents = documents; }
+}
+
+
+
+
+package com.tcs.bancs.microservices.request;
+
+public class VersionDocumentList {
+    private String base64;
+    private String documentName;
+    private String documentID;
+
+    public String getBase64() { return base64; }
+    public void setBase64(String base64) { this.base64 = base64; }
+    
+    public String getDocumentName() { return documentName; }
+    public void setDocumentName(String documentName) { this.documentName = documentName; }
+    
+    public String getDocumentID() { return documentID; }
+    public void setDocumentID(String documentID) { this.documentID = documentID; }
+}
+
+
+
+package com.tcs.bancs.microservices.db.model;
+
+import javax.persistence.Entity;
+import javax.persistence.Id;
+import javax.persistence.Table;
+import java.time.LocalDate;
+
+@Entity
+@Table(name = "EDMS_LOGS")
+public class EDMS_LOGS {
+    @Id
+    private String ID;
+    private String BRANCH_CODE;
+    private String NAME;
+    private String RESPONSE_CODE;
+    private String RESPONSE_MESSAGE;
+    private String UNIQUE_IDENTIFIER;
+    private LocalDate UPLOAD_DATE;
+    private String FILE_TYPE;
+
+    // Getters and Setters
+    public String getID() { return ID; }
+    public void setID(String ID) { this.ID = ID; }
+
+    public String getBRANCH_CODE() { return BRANCH_CODE; }
+    public void setBRANCH_CODE(String BRANCH_CODE) { this.BRANCH_CODE = BRANCH_CODE; }
+
+    public String getNAME() { return NAME; }
+    public void setNAME(String NAME) { this.NAME = NAME; }
+
+    public String getRESPONSE_CODE() { return RESPONSE_CODE; }
+    public void setRESPONSE_CODE(String RESPONSE_CODE) { this.RESPONSE_CODE = RESPONSE_CODE; }
+
+    public String getRESPONSE_MESSAGE() { return RESPONSE_MESSAGE; }
+    public void setRESPONSE_MESSAGE(String RESPONSE_MESSAGE) { this.RESPONSE_MESSAGE = RESPONSE_MESSAGE; }
+
+    public String getUNIQUE_IDENTIFIER() { return UNIQUE_IDENTIFIER; }
+    public void setUNIQUE_IDENTIFIER(String UNIQUE_IDENTIFIER) { this.UNIQUE_IDENTIFIER = UNIQUE_IDENTIFIER; }
+
+    public LocalDate getUPLOAD_DATE() { return UPLOAD_DATE; }
+    public void setUPLOAD_DATE(LocalDate UPLOAD_DATE) { this.UPLOAD_DATE = UPLOAD_DATE; }
+
+    public String getFILE_TYPE() { return FILE_TYPE; }
+    public void setFILE_TYPE(String FILE_TYPE) { this.FILE_TYPE = FILE_TYPE; }
+}
+
+
+
+
+package com.tcs.bancs.microservices.repository;
+
+import com.tcs.bancs.microservices.db.model.EDMS_LOGS;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface EDMS_REPO extends JpaRepository<EDMS_LOGS, String> {
+    // Custom query methods can be added here if needed
+}
+
+
+
