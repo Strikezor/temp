@@ -1,0 +1,101 @@
+Technical Document
+MandateDecryption
+
+Objective:
+	It is a spring Batch Account Enquiry Processing Module. It reads the pending records from the database, calls the EIS Account Enquiry API, decrypts the response, validates the response fields, updates the database based on different conditions, and supports retry/error handling. Based on the validation results, the module updates the transaction status and records appropriate error information in the database.
+
+Architecture:
+	The module follows the spring batch architecture, which consists of the following components:
+•	Reader – Reads the pending account enquiry records from the database.
+•	Processor – Prepares the request and invokes the EIS Account Enquiry API.
+•	Writer – Validates the response and updates the database.
+•	Job Configuration – controls the execution flow of the batch job.
+•	Partitioning – Enables parallel processing of records to improve performance.
+
+
+Table Used:
+ADHD
+Status and other fields	Meaning 
+ADHD_STATUS=25, ADHD_TRN_DATE =today’s date and BATCH_NUMBER = from vm arguments 	Record is picked up for processing.
+ADHD_STATUS=37	Processing completed successfully after all validations pass and database is updated successfully.
+ADHD_STATUS=28	Processing failed due to API errors, validation failures, or business rule failures.
+
+
+
+Classes:
+1.AdhdBatchProcessConfig.java
+	It is the configuration class responsible for creating and configuring the spring batch job. It defines the complete execution flow of the batch process. It configures a Spring Batch job named accountEnquiryJob designed for high-volume data processing using a partitioned architecture. It begins with a checkDataStep to verify data availability before launching the main accountEnquiryService step, which dynamically splits the workload into multiple parallel threads using a custom RecourdCountPartitioner. Each partition executes the enquiry step, processing records in defined chunkSize batches through a reader-processor-writer pipeline while gracefully handling up to 100 HttpClientErrorException failures without stopping the job. The use of RunIdIncrementer ensures the job can be re-run with unique identifiers, and dependency injection manages the chunk size configuration from external properties.
+Responsibilities
+•	Configures the Accoubt Enquiry batch job.
+•	Defines the batch steps.
+•	Configures the reader,writer and processor
+•	Enables chunk processing 
+•	Configures partitioning for parallel processing
+•	Enables fault tolerance and skip logic
+•	Starts the batch execution
+
+2.InquiryResponseUpdateWritter.java
+	InquiryResponseUpdateWritter processes the Account Enquiry API response and updates the transaction details in the database. This write method processes a batch of API responses by parsing JSON data to evaluate ERROR_CODE and ACCOUNT_SYSTEM fields for each transaction. It implements specific business logic to categorize records into success or various error lists (e.g., missing PROD_ID, branch mismatches) based on conditional checks against configuration and database values. Successful transactions are queued for standard updates, while specific failures trigger custom error descriptions, NPCI error mapping, and controlled thread sleep delays. Finally, the method prepares these categorized lists for efficient bulk database updates, ensuring that status changes are applied only when strict validation criteria are met.
+Responsibilities
+•	Reads the API response
+•	Parses the JSON response
+•	Validates the errorCode if any
+•	Validates the Account System
+•	Validates the productid
+•	Validates the Branch Number
+•	Retrives the error desc from error code
+•	Updates ADHD table with success or failure status
+•	Logs processing details and exceptions
+
+3.InquiryRequestProcessor.java
+	InquiryRequestProcessor processes each record read from the database and prepares the Account Enquiry API request .The process method orchestrates a secure external API call by accepting an Adhd data object and returning a decrypted response map. It first delegates to encryptionServices to perform reflection-based data extraction and cryptographic encryption, generating an EncryptedRequestBean and security token. These credentials are then passed to apiCaller to execute the HTTP request against the accInqAPi endpoint. The extensive throws clause propagates low-level checked exceptions for reflection errors (e.g., NoSuchMethodException), cryptographic failures (e.g., BadPaddingException), and network issues (IOException) directly to the caller. This design enforces strict error handling at the invocation site rather than masking internal failures with generic runtime exceptions.
+
+4. AccountInquiryRestCall
+	This method implements a hybrid encryption workflow by RSA-encrypting a session key for the AccessToken header while sending the main payload as a JSON-serialized EncryptedRequestBean. Upon receiving the response, it deserializes the JSON map and AES-decrypts the "RESPONSE" field using the original session key. Finally, it sanitizes the decrypted string by extracting the substring between the first { and last } to ensure valid JSON formatting before returning the map.
+Responsibilities
+•	Generates the request payload
+•	Encrypts the session key
+•	Creates HTTP headers
+•	Sends the REST API request using REST templates
+•	Receives the encrypted response
+•	Decrypt the response payload
+•	Returns the decrypted response to the processor
+
+
+
+5. BatchJobExecutor
+	This startbatchJob method implements a conditional polling mechanism for a Spring Batch job. It first checks if data exists via adhdBatchProcessConfig.isDataAvailable(); if records are found, it launches the accountEnquiryJob with a timestamp parameter, otherwise, it pauses execution (Thread.sleep) to wait for data.
+Responsibilities
+•	Conditional Execution: Checks for available data before triggering the batch job, otherwise pauses execution.
+•	Unique Identification: Generates unique job parameters using the current timestamp to allow repeated runs.
+•	Job Launching: Invokes the Spring JobLauncher to start the accountEnquiryJob process.
+•	Error Management: Catches specific Spring Batch exceptions and interruptions to log failures gracefully.
+
+6.RecourdCountPartitioner.java
+	This RecordCountPartitioner implements a Modulo-Based Partitioning Strategy for Spring Batch, shifting from a database-dependent range approach to a lightweight, data-type-agnostic logic. Instead of querying the database for min/max values to determine ranges, the partition method simply generates a map of ExecutionContext objects, assigning each a unique partitionNumber (0 to gridSize-1) and the total gridSize. These context values are then passed to the reader, which uses them in a SQL MOD clause (e.g., WHERE MOD(id, gridSize) = partitionNumber) to deterministically slice the data, ensuring balanced distribution without expensive database metadata queries.
+
+7.EISRequestBuilder.java
+	The EISRequestBuilder class constructs a secure, encrypted request for an external system (EIS) by preparing query parameters, encrypting them with a random AES key, and generating a digital signature. It uses SLF4J for logging errors and relies on an injected AESEncryptionUtility for cryptographic operations. The method returns an array containing the encrypted request object and the corresponding AES key for later use.
+Responsibilities
+•	Secure Key Generation: Generates a cryptographically secure random 32-character alphanumeric AES key for each request.
+•	Data Preparation: Populates a map with essential transaction details like SOURCE_ID, account number, and branch code from the input Adhd object.
+•	Encryption: Serializes the data map to JSON and encrypts it using the generated AES key via the AESEncryptionUtility.
+•	Digital Signing: Creates a digital signature of the original JSON data to ensure integrity and removes newline characters from the result.
+•	Response Packaging: Encapsulates the encrypted payload, reference number, and signature into an EncryptedRequestBean, returning it alongside the AES key in an Object array.
+
+8. AESEncryptionUtility
+	The AESEncryptionUtility class is a security component responsible for initializing cryptographic assets once at startup to ensure thread-safe encryption and signing operations. It loads an RSA private key from a file and a public key from an X.509 certificate, storing them as reusable instance variables to avoid repeated I/O overhead. The class configures specific algorithms for AES encryption (AES/GCM/NoPadding) and RSA signing (SHA256withRSA), while also registering the Bouncy Castle provider for enhanced cryptographic support. This design optimizes performance by performing expensive key parsing and loading only during the @PostConstruct phase.
+
+9.Model Class
+	A standard Java model class (POJO) typically defines private fields to store data, along with public getters and setters to access and modify them securely.  It includes a constructor (often both default and parameterized) to initialize objects and overrides the toString() method to provide a readable string representation of the object's state for debugging.
+1.	Adhd.java
+2.	Adhdpk.java 
+
+10.RequestBean and ResponseBean
+	A Request Bean is a Java object that encapsulates data sent to a server or external system, typically containing input parameters, filters, or payload data required to initiate an action. Conversely, a Response Bean structures the data returned from the server, holding the result of the operation, status codes, error messages, or the requested entity data. Both classes rely on private fields, getters, setters, and toString() methods to ensure type safety, encapsulation, and easy serialization (e.g., to JSON) during API communication.
+1.	EncryptedRequestBean
+2.	EncryptedResponseBean
+
+Summary
+	The Account Enquiry Batch Processing Module automates the processing of account enquiry transactions using the Spring batch framework. It reads eligible records from the ADHD table based on the instance number passed through VM arguments and marks then as in progress(ADHD_STATUS=25).The module invokes the EIS Account Enquiry API, processes the response, and validates parameters such as Error Code, Account System, Product ID, and Branch Number. Based on the validations results, the transaction status is updated as success(ADHD_STATUS=37) or failure(ADHD_STATUS=28).This Module ensures reliable and efficient batch execution through exception handling and fault tolerance.
+
