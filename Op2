@@ -1,0 +1,115 @@
+# Technical Document
+MandateEncryption
+## Objective
+It is an ACH Mandate Encryption Utility. It reads pending mandate folders from a local source path, validates file properties (such as name length and dates), and groups them into batches. It processes these files by zipping the folder contents, digitally signing the ZIP file using a CMS signature, embedding the content into an XML envelope, and encrypting the XML payload via PGP. The utility continuously updates the database with processing statuses, securely uploads the final encrypted files to a remote SFTP server, routes failures appropriately, and performs backup operations.
+## Architecture
+The module follows a multi-threaded batch processing architecture consisting of the following components:
+ * **Launcher** – Scans source directories, applies date and naming validations, groups valid files into batches, and submits them to an ExecutorService.
+ * **Processor (Runnable)** – Executes the core cryptographic workflow: zipping, CMS signing, XML generation, PGP encryption, and SFTP uploading.
+ * **Database Manager** – Handles secure Oracle database connections using HikariCP and executes SQL queries to track file status throughout the process.
+ * **SFTP Client** – Authenticates with a remote server using a private key to upload the final encrypted files.
+ * **Utilities** – Provides helper methods for cryptography (AES, PGP, RSA), file archiving, and XML DOM manipulation.
+## Table Used
+| Status and Error Fields | Meaning |
+|---|---|
+| **Status = "13"** | ZIP_SUCCESS - Folder contents successfully zipped. |
+| **Status = "14"** | ZIP_FAILURE - Failed to zip the file contents. |
+| **Status = "11"** | SIGN_SUCCESS - Zipped file successfully digitally signed. |
+| **Status = "12"** | SIGN_FAILURE - Failed to generate digital signature. |
+| **Status = "09"** | ENCRYPTION_SUCCESS - Signed XML successfully encrypted via PGP. |
+| **Status = "10"** | ENCRYPTION_FAILURE - PGP Encryption failed. |
+| **Status = "35"** | FAILED_FILE - Processing failed. |
+| **ERROR_CODE = "ERR01"** | FILE_NAME_FAILED - Failed due to invalid file name length or naming convention. |
+| **ERROR_CODE = "ERR03"** | DATE_VALIDATION_FAILED - Failed due to file date mismatch. |
+| **ERROR_CODE = "ERR04"** | FILE_ALREADY_PROCESSED - Failed because the file was previously processed. |
+## Classes
+### 1. MandateLauncher.java
+It is the main entry point responsible for initializing the encryption utility.
+**Responsibilities:**
+ * Loads security keys, certificates, and configuration parameters via properties files.
+ * Scans the local source directory for folders categorized by file type (CREATE, AMEND, CANCEL).
+ * Validates file names, lengths, and dates, and ensures duplicate files are not processed by querying the database.
+ * Groups valid files into batches, creates processing directories, and dispatches them to a single-thread ExecutorService running MandateMain.
+### 2. MandateMain.java
+It implements the Runnable interface to process the batch of valid mandate files asynchronously.
+**Responsibilities:**
+ * Zips the source folder contents.
+ * Generates a CMS digital signature for the zipped file using a private key and X.509 certificate.
+ * Wraps the Base64-encoded zip, signature, and public certificate into a structured XML envelope.
+ * Encrypts the generated XML payload via PGP using AES-256.
+ * Uploads the final encrypted file to the respective zone destination via the SFTP utility.
+ * Updates the database statuses and performs backup and cleanup operations.
+### 3. SFTPUtility.java
+Manages secure file upload operations to a remote SFTP server using the JSch library.
+**Responsibilities:**
+ * Establishes a session using AES-decrypted credentials and private key identities, bypassing strict host key checking.
+ * Converts local files into MultipartFile streams and uploads them to configured remote directories.
+### 4. Manager.java & ConnectionManager.java
+These classes handle database pooling and the execution of parameterized SQL statements.
+**Responsibilities:**
+ * Initializes the HikariCP database connection pool securely using AES-decrypted credentials.
+ * Inserts processing records into mandate tracking tables (mandateEncInsertQuery, mandateEncInsertQuery2).
+ * Verifies if files have already been processed to maintain idempotency.
+### 5. MandateUtility.java
+A comprehensive utility class handling cryptographic operations and file formatting.
+**Responsibilities:**
+ * Decrypts secure credentials using AES/GCM/NoPadding.
+ * Generates CMS signatures using BouncyCastle and X.509 certificates.
+ * Generates the final XML structure containing the OrgContent, Signature, and Certificate tags via DOM parsing.
+ * Performs PGP encryption on the final payload.
+### 6. MandateEncProperties.java
+A singleton configuration class that loads configuration parameters from the ACHMandateEncProperties.properties file at runtime.
+### 7. Constants (ErrorConstants.java & MandateConstants.java)
+Enum classes defining application-wide constants.
+**Responsibilities:**
+ * Defines structured mappings for application status codes like ZIP_SUCCESS, SIGN_SUCCESS, and ENCRYPTION_SUCCESS.
+ * Provides standardized logger configuration file names and paths.
+## Summary
+The ACH Mandate Encryption Utility automates the packaging, signing, and encryption of mandate transaction files. It rigorously validates input files against naming and date rules to prevent duplicates, grouping valid files into processing batches. Using a robust multithreaded workflow, it zips file contents, applies a CMS digital signature, and encapsulates the payload into an XML Envelope before encrypting it using PGP. Finally, it securely uploads the encrypted files via SFTP, updates the database at each critical transition (e.g., ZIP_SUCCESS, ENCRYPTION_SUCCESS), and retains organized backups, ensuring complete data integrity and non-repudiation.
+
+
+
+### Classes
+#### 1. MandateLauncher.java
+The application's main entry point that initializes cryptographic assets, connects to external systems, and handles the batching and validation of pending mandate files.
+ * **Initialization:** Loads configuration properties from MandateEncProperties and configures log4j2 logging. It adds the BouncyCastleProvider to the security context, loads RSA private keys, and parses X.509 public/private certificates for later cryptographic use.
+ * **Validation Logic:** Iterates through source directories (e.g., CREATE, AMEND, CANCEL) and applies strict validation rules to each file, checking minimum/maximum file name lengths, name prefixes/suffixes, and date constraints based on a configured noOfDays window.
+ * **Duplicate Checking:** Queries the database using Manager.isFilepreviouslyProcessed() to ensure the file has not been processed in a prior execution.
+ * **Batching & Routing:** Groups validated files into processing batches based on fileProcessLimit. If the End-Of-Day (EODReached) flag is set, it processes the final remaining batch regardless of the limit. Files failing validation are routed to specific error directories (e.g., NameLengthValidationFailed, DateValidationFailed).
+ * **Execution:** Moves validated batches into a temporary ToProcessPath folder and dispatches them to a SingleThreadExecutor running the MandateMain worker class.
+#### 2. MandateMain.java
+A worker class implementing the Runnable interface, responsible for executing the core zipping, signing, packaging, and encryption workflow on a batch of files.
+ * **Zipping:** Compresses the assigned input folder into a ZIP file using MandateUtility.zipFolder.
+ * **CMS Signing & XML Packaging:** Reads the ZIP file as a byte array, generates a CMS (Cryptographic Message Syntax) digital signature using MandateUtility.signZip, and embeds the Base64-encoded ZIP content, signature, and X.509 public certificate into a structured XML envelope using MandateUtility.generateXml.
+ * **PGP Encryption:** Encrypts the signed XML file using PGP (AES-256) via MandateUtility.rsaEncryptBytes.
+ * **SFTP Routing:** Evaluates the file type (CREATE, CANCEL, AMEND), packages the encrypted file as a Spring MockMultipartFile, and uploads it to the appropriate remote server path using SFTPUtility.upload.
+ * **Database Updates:** Persists transaction statuses (e.g., ZIP_SUCCESS, SIGN_SUCCESS, ENCRYPTION_SUCCESS) to the database using the Manager class at each transition.
+ * **Backup & Cleanup:** Creates backups of the original source folders and the final encrypted files, then deletes intermediate and temporary processing files to free up disk space.
+#### 3. SFTPUtility.java
+Handles all SSH File Transfer Protocol operations for securely uploading the encrypted mandate files.
+ * **Connection Setup:** Establishes a remote SFTP session (getsftpConnectiontoRemote) using the JSch library, authenticating via an AES-decrypted username and a private key file, while disabling strict host key checking.
+ * **File Uploading:** Provides the upload(String remoteDir, MultipartFile file) method to navigate to the target remote directory and stream the encrypted MultipartFile directly to the server.
+#### 4. Manager.java
+Manages the application's data persistence and duplicate prevention logic via parameterized SQL statements.
+ * **Batch Logging:** The insertintoMandate_logs method inserts high-level processing records into the database, tracking the Reference Number, File Name, Encryption Type, and transaction Status.
+ * **File Logging:** The insertintoMandate_file_logs method logs specific details about the folder processing, updating the database with an ENC indicator and zone information.
+ * **Idempotency Check:** The isFilepreviouslyProcessed method executes queries against the tracking tables to ensure a file name and date combination does not already exist without an error code, preventing duplicate file processing.
+#### 5. ConnectionManager.java
+Initializes and provides database connections using the HikariCP connection pooling library.
+ * **Secure Initialization:** A static block reads the encrypted database URL, username, and password, decrypting them in memory using MandateUtility.aesDecrypt.
+ * **Pool Configuration:** Configures the HikariDataSource with the Oracle JDBC driver, setting connection properties like a maximum pool size of 10, minimum idle connections of 2, and specific idle/connection timeouts.
+#### 6. MandateUtility.java
+A highly comprehensive utility class containing the application's core cryptographic engine, DOM manipulation, and file I/O operations.
+ * **AES Cryptography:** Provides aesDecrypt and decrypt1 methods implementing AES/GCM/NoPadding to securely decrypt application credentials.
+ * **Digital Signatures (CMS):** The signZip and signDataCMS methods utilize BouncyCastle APIs (CMSSignedDataGenerator, JcaContentSignerBuilder) to cryptographically sign byte arrays using a private key and X.509 certificate.
+ * **XML Generation:** The generateXml method uses the Java DOM API (DocumentBuilderFactory, Transformer) to dynamically construct the XML <Envelope> containing <OrgContent>, <Signature>, and <Certificate> nodes.
+ * **PGP Cryptography:** The rsaEncryptBytes and rsaEncryptFile methods use BouncyCastle's PGPEncryptedDataGenerator to encrypt the XML payload using AES-256 and public key cryptography.
+ * **File Operations:** Contains methods for recursive folder zipping (zipFolder), directory deletion (deleteDirectory), and file backups (createBackUp).
+#### 7. MandateEncProperties.java
+A Singleton configuration manager that reads external deployment properties.
+ * **Initialization:** Loads the ACHMandateEncProperties.properties file from a relative path into a java.util.Properties object via a FileInputStream.
+ * **Data Access:** Provides the getProperty(String key) method to fetch configuration values, throwing a RuntimeException if a requested key does not exist.
+#### 8. Constants (ErrorConstants.java & MandateConstants.java)
+Enum classes establishing uniform static variables across the application.
+ * **ErrorConstants:** Maps application states to string codes (e.g., ZIP_SUCCESS("13"), SIGN_SUCCESS("11"), ENCRYPTION_SUCCESS("09")) and defines standard error tags (e.g., ERR04("FILE_ALREADY_PROCESSED")).
+ * **MandateConstants:** Defines global identifiers for the application logger (LOGGER_FILENAME, LOGGER_FILEPATH).
