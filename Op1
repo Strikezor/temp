@@ -116,3 +116,26 @@ A Singleton configuration manager that reads external properties.
 Enum classes defining static application variables.
  * **ErrorConstants:** Maps human-readable statuses to string codes (e.g., FILE_PICKED_FOR_DECRYPTION("00"), UNSIGN_SUCCESS("03"), DECRYPTION_SUCCESS("07"), FAILED_FILE("35")) and standardized error tags (e.g., ERR01 for file name failures).
  * **MandateConstants:** Defines logging identifiers like LOGGER_FILENAME and LOGGER_FILEPATH.
+
+
+## File Movement and Routing Directory
+Below is the routing logic for files during the Mandate Decryption process, detailing exactly where a file is moved or extracted during successes and failures.
+### 1. Initial Validation Phase (Pre-Processing)
+During the initial scan, files that fail strict validation rules are immediately routed to specific error directories:
+ * **File Name or Length Validation Failure:** Moved to the directory specified by NAME_VALIDATION_FAILED_PATH.
+ * **Date Validation Failure:** Moved to the directory specified by DATE_EXTRACTION_FAILED_PATH.
+ * **Duplicate File Detected:** Moved to the directory specified by DUPLICATE_FILE_PATH.
+ * **Invalid File Format / Not a ZIP:** Moved to the directory specified by NOT_A_ZIP_PATH or NAME_VALIDATION_FAILED_PATH depending on the stage of validation.
+### 2. Core Processing Phase
+During the decryption, unsigning, and unzipping stages, files are routed based on cryptographic success or failure:
+ * **Decrypted Output (Intermediate):** The raw decrypted payload (prior to XML extraction and unzipping) is temporarily saved to DECRYPTED_FILE_PATH.
+ * **Data Extraction Failure:** If the system cannot parse the XML to extract the signature and content, the file is moved to DATA_EXTRACTION_FAILED_PATH.
+ * **Signature Verification Failure:** If the digital signature fails verification, the file is moved to SIGN_VERIFICATION_FAILED_PATH.
+ * **Decryption or Unzip Failure:** If the payload cannot be decrypted or unzipped properly, the file is moved to DECRYPTION_FAILED_PATH.
+ * **Processing Success (Final Destination):**
+   * **XML Files:** Extracted and moved to DESTINATION_PATH, further categorized into sub-folders based on their Zone (e.g., SOU, NOR, OTH).
+   * **Image Files (.tiff, .jpg):** Extracted and moved to the directory specified by IMAGE_PATH.
+### 3. Backup Phase (Post-Processing Success)
+Upon completely successful processing, the utility archives the files to ensure no data is lost:
+ * **Original File Backup:** The original source ZIP file is moved from the source path to BACKUP_PATH, nested within folders categorized by file type (CREATE, AMEND, CANCEL) and the current date.
+ * **Processed Output Backup:** A copy of the successfully unzipped output folder is saved to OUTPUT_BACKUP_PATH, similarly nested by file type (CREATE, AMEND, CANCEL) and the current date.
