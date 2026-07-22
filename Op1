@@ -139,3 +139,30 @@ During the decryption, unsigning, and unzipping stages, files are routed based o
 Upon completely successful processing, the utility archives the files to ensure no data is lost:
  * **Original File Backup:** The original source ZIP file is moved from the source path to BACKUP_PATH, nested within folders categorized by file type (CREATE, AMEND, CANCEL) and the current date.
  * **Processed Output Backup:** A copy of the successfully unzipped output folder is saved to OUTPUT_BACKUP_PATH, similarly nested by file type (CREATE, AMEND, CANCEL) and the current date.
+
+
+
+
+## Metadata and Configuration Details
+The Mandate Decryption utility relies on various metadata and configuration parameters defined in the ACHMandateDecProperties.properties file to dictate its processing rules, connection details, and validation constraints. Below are the specific configuration details extracted from the properties file:
+**Validation & Processing Parameters**
+ * **Thread Sleep Time (THREAD_SLEEP_TIME):** 60000 milliseconds (60 seconds) - The duration the application waits before checking for new files when the source directory is empty.
+ * **Number of Days (NO_OF_DAYS):** 6 - The rolling window (in days) used to validate if a file's date falls within the acceptable processing timeframe.
+ * **Minimum Name Length (MIN_NAME_LENGTH):** 42 characters.
+ * **Maximum Name Length (MAX_NAME_LENGTH):** 100 characters.
+ * **Encrypted Files Only (ONLY_ENCRYPTED):** TRUE - A flag indicating whether the application should strictly process only encrypted files.
+**File Naming Conventions**
+ * **CREATE Files:** Must start with MMS-CREATE-SBIN- and end with -INP.
+ * **AMEND Files:** Must start with MMS-AMEND-SBIN- and end with -INP.
+ * **CANCEL Files:** Must start with MMS-CANCEL-SBIN- and end with -INP.
+**SFTP Connection Details**
+ * **Host URL/IP (SFTP_HOST):** 10.191.66.59
+ * **Port (SFTP_PORT):** 7085
+ * **Remote Directory (REMOTE_DIR):** /MAN/MANDATE_DECRYPTION/SOURCE_FILES/ - The source folder on the SFTP server to pull files from.
+ * **Archive Directory (ARCHIVE_DIR):** /MAN/MANDATE_DECRYPTION/ArchiveDir - The folder on the SFTP server where files are moved after a successful download.
+**Database Connection Pool Settings**
+ * **Minimum Connections (minConn):** 5
+ * **Maximum Connections (maxConn):** 10
+ * **Partition Count (partitionCount):** 5
+ * **Idle Max Age (idleMaxAge):** 60
+ * **Idle Age Test Time (idleAgeTestTime):** 30
