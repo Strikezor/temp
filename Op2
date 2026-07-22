@@ -113,3 +113,31 @@ A Singleton configuration manager that reads external deployment properties.
 Enum classes establishing uniform static variables across the application.
  * **ErrorConstants:** Maps application states to string codes (e.g., ZIP_SUCCESS("13"), SIGN_SUCCESS("11"), ENCRYPTION_SUCCESS("09")) and defines standard error tags (e.g., ERR04("FILE_ALREADY_PROCESSED")).
  * **MandateConstants:** Defines global identifiers for the application logger (LOGGER_FILENAME, LOGGER_FILEPATH).
+
+
+
+
+## File Movement and Routing Directory
+Below is the routing logic for files during the Mandate Encryption process, detailing exactly where a file is moved, extracted, or backed up during successes and failures.
+### 1. Initial Validation Phase (Pre-Processing)
+During the initial scan of the source directories, files are evaluated. Before validation, a preliminary backup of the file is copied to SRC_BACKUP_PATH. Files failing validation are moved to designated error folders within FAILED_FILES_PATH:
+ * **File Name Convention Failure:** Moved to the NameValidationFailed directory.
+ * **File Name Length Failure:** Moved to the NameLengthValidationFailed directory.
+ * **Date Validation Failure:** Moved to the DateValidationFailed directory.
+ * **Duplicate / Already Processed File:** Moved to the NameValidationFailed directory.
+### 2. Batch Preparation Phase
+ * **Valid Files:** Successfully validated files are moved from the source directory to TO_PROCESS_PATH, where they are grouped into dynamically named batch folders (e.g., MMS-CREATE-SBIN-SBIN...) based on the configured batch limit.
+### 3. Core Processing & Transfer Phase
+During the zipping, signing, and encryption stages, intermediate and final files are routed through specific temporary and destination paths:
+ * **Zipped Output (Intermediate):** The contents of the batch folder are zipped and saved to ZIPPED_PATH.
+ * **Signed Output (Intermediate):** The generated XML file containing the CMS signature and Base64 payload is saved to SIGNED_PATH.
+ * **Encrypted Output (Final):** The fully encrypted PGP file is saved to DESTINATION_PATH.
+ * **Remote Transfer Routing:** Based on the transaction type, the encrypted file is copied to a specific local staging directory before being uploaded via SFTP:
+   * **CREATE Files:** Copied to CREATE_DEST_PATH, then uploaded to CREATE_ORGN_DEST_PATH on the remote server.
+   * **CANCEL Files:** Copied to CANCEL_DEST_PATH, then uploaded to CANCEL_ORGN_DEST_PATH on the remote server.
+   * **AMEND Files:** Copied to AMEND_DEST_PATH, then uploaded to AMEND_ORGN_DEST_PATH on the remote server.
+### 4. Backup and Cleanup Phase
+Upon successful encryption and transfer, the utility archives the data and cleans up temporary resources:
+ * **Source File Backup:** The zipped source files are copied to BACKUP_PATH under a SourceFilesBackUp sub-directory, organized by date and file type.
+ * **Encrypted Output Backup:** The final encrypted ZIP file is copied to BACKUP_PATH under an EncryptedFilesBackUp sub-directory, organized by date and file type.
+ * **Cleanup:** To conserve disk space, the intermediate working directories (from TO_PROCESS_PATH), the temporary zipped file (from ZIPPED_PATH), and the signed XML file (from SIGNED_PATH) are permanently deleted from the local system.
