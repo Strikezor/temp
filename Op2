@@ -177,3 +177,20 @@ The Mandate Encryption utility relies on various metadata and configuration para
  * **Partition Count (partitionCount):** 2
  * **Idle Max Age (idleMaxAge):** 60
  * **Idle Age Test Time (idleAgeTestTime):** 30
+
+
+
+## Database Queries
+Below are the parameterized SQL queries utilized by the Mandate Encryption utility for database logging and duplication checks, as defined in the metadata properties:
+ * **FILTER_CHECK_QUERY:**
+   Used to check if a specific file and date combination already exists in the file processing logs to prevent duplication.
+   SELECT COUNT(*) FROM MANDATE_FILE_LOGS WHERE TRIM(FILE_NAME)=? and TRUNC (FILE_PROCESS_DATE) = TO_DATE(?)
+ * **FILTER_CHECK_QUERY2:**
+   Used to retrieve the error code of a previously logged file to determine if it was processed successfully or if it failed and can be retried.
+   SELECT ERROR_CODE FROM MANDATE_FILE_LOGS WHERE TRIM(FILE_NAME)=? and TRUNC (FILE_PROCESS_DATE) = TO_DATE(?)
+ * **INSERT_QUERY:**
+   Used to insert high-level processing metrics and tracking statuses into the main encryption logs table.
+   INSERT INTO MANDATE_ENC_LOGS (REFERENCE_NO, FOLDER_RECEIVED_DATE, FOLDER_NAME, FOLDER_TYPE, ERROR_CODE, ENCRYPTION_TYPE, NO_OF_RECORDS, FOLDER_COPIED_TIME, STATUS, STATUS_DESCRIPTION, LAST_UPDATED_TIME, ZONE) values (?,?,?,?,?,?,?,?,?,?,?,?)
+ * **INSERT_QUERY2:**
+   Used to log specific details about the folder processing, including zone information and encryption indicators, into the file logs table.
+   INSERT INTO MANDATE_FILE_LOGS (FILE_NAME, FOLDER_NAME, ERROR_CODE, FILE_PROCESS_DATE, LAST_UPDATED_TIME, FILE_TYPE, ZONE) values (?,?,?,?,?,?,?)
