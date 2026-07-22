@@ -141,3 +141,39 @@ Upon successful encryption and transfer, the utility archives the data and clean
  * **Source File Backup:** The zipped source files are copied to BACKUP_PATH under a SourceFilesBackUp sub-directory, organized by date and file type.
  * **Encrypted Output Backup:** The final encrypted ZIP file is copied to BACKUP_PATH under an EncryptedFilesBackUp sub-directory, organized by date and file type.
  * **Cleanup:** To conserve disk space, the intermediate working directories (from TO_PROCESS_PATH), the temporary zipped file (from ZIPPED_PATH), and the signed XML file (from SIGNED_PATH) are permanently deleted from the local system.
+
+
+
+
+## Metadata and Configuration Details
+The Mandate Encryption utility relies on various metadata and configuration parameters defined in the ACHMandateEncProperties.properties file to dictate its batch processing rules, SFTP routing, and validation constraints. Below are the specific configuration details extracted from the provided properties file:
+**Validation & Processing Parameters**
+ * **Thread Sleep Time (THREAD_SLEEP_TIME):** 60000 milliseconds (60 seconds) - The duration the application waits before checking for new files to process.
+ * **Number of Days (NO_OF_DAYS):** 5 - The rolling window (in days) used to validate if a file's date falls within the acceptable processing timeframe.
+ * **Minimum File Name Length (MIN_FILE_NAME_LENGTH):** 50 characters.
+ * **Maximum File Name Length (MAX_FILE_NAME_LENGTH):** 100 characters.
+ * **File Process Limit (FILE_PROCESS_LIMIT):** 10 - The number of files to group into a single batch for processing.
+ * **End of Day Reached (EOD_REACHED):** YES - A flag indicating whether the final batch should be processed immediately, bypassing the standard file limit.
+ * **User ID (USER_ID):** 5938830
+ * **Tail Name (TAIL_NAME):** 09598030
+**File Naming Conventions**
+ * **Batch Name Starts With (NAME_STARTS_WITH):** MMS-ACCEPT-SBIN
+ * **Batch Name Ends With (NAME_ENDS_WITH):** -INP
+ * **CREATE Files:** Must start with MMS-CREATE-SBIN- and end with -INP.
+ * **AMEND Files:** Must start with MMS-AMEND-SBIN- and end with -INP.
+ * **CANCEL Files:** Must start with MMS-CANCEL-SBIN- and end with -INP.
+**SFTP Connection Details**
+ * **Host URL/IP (SFTP_HOST):** 10.191.141.239
+ * **Port (SFTP_PORT):** 7085
+ * **SFTP Wait Time (SFTP_WAIT_TIME):** 60000
+ * **Remote Directory (REMOTE_DIR):** //MAN//MANDATE_ENCRYPTION//SOURCE_FILES//
+ * **Archive Directory (ARCHIVE_DIR):** //MAN//MANDATE_ENCRYPTION//ArchiveDir//
+ * **CREATE Remote Destination (CREATE_ORGN_DEST_PATH):** //MAN//MANDATE_ENCRYPTION//CREATE_ENCRYPTED_FILES// - The final SFTP path where encrypted CREATE files are uploaded.
+ * **CANCEL Remote Destination (CANCEL_ORGN_DEST_PATH):** //MAN//MANDATE_ENCRYPTION//CANCEL_ENCRYPTED_FILES// - The final SFTP path where encrypted CANCEL files are uploaded.
+ * **AMEND Remote Destination (AMEND_ORGN_DEST_PATH):** //MAN//MANDATE_ENCRYPTION//AMEND_ENCRYPTED_FILES// - The final SFTP path where encrypted AMEND files are uploaded.
+**Database Connection Pool Settings**
+ * **Minimum Connections (minConn):** 5
+ * **Maximum Connections (maxConn):** 10
+ * **Partition Count (partitionCount):** 2
+ * **Idle Max Age (idleMaxAge):** 60
+ * **Idle Age Test Time (idleAgeTestTime):** 30
