@@ -1,0 +1,119 @@
+# Technical Document
+PAIN 09, 10, 11 XML Processing
+## Objective
+It is a PAIN XML Processing Utility designed to automate the ingestion and validation of mandate creation (PAIN 09), amendment (PAIN 10), and cancellation (PAIN 11) requests. The utility reads incoming XML files and their associated image attachments, unmarshals the XML data using JAXB, and rigorously validates the mandate properties against predefined business rules. Upon successful validation, it updates the core database tables (ACHT, ACMM, ACMH, and LNFT) and routes the processed files to success or failure directories based on the outcome of the validations.
+## Architecture
+The module follows a scheduled batch processing architecture consisting of the following components:
+ * **Scheduler / Launcher** – Utilizes a java.util.Timer and TimerTask to periodically poll configured source directories for new XML files.
+ * **XML Parser** – Leverages the Jakarta XML Binding (JAXB) API to unmarshal PAIN 09, 10, and 11 XML payloads into Java domain objects.
+ * **Database Processors** – Dedicated processing classes (UpdateTableForCreate, UpdateTableForAmend, UpdateTableForCancel) handle the specific extraction, validation, and database insertion logic for each mandate type.
+ * **Utilities & Sequence Manager** – Helper classes manage AES decryption of database credentials, check digit validations, file archiving, and generation of a unique 36-digit sequential identifier.
+## Table Used (Validation & Status Mapping)
+| Status and Error Fields | Meaning |
+|---|---|
+| **ACTION = "C"** | Indicates a Mandate Creation request (PAIN 09) inserted into the ACHT table. |
+| **ACTION = "A"** | Indicates a Mandate Amendment request (PAIN 10) inserted into the ACHT table. |
+| **ACTION = "D"** | Indicates a Mandate Cancellation request (PAIN 11) inserted into the ACHT table. |
+| **TECHNI_STATUS = "00"** | Indicates successful validation of the mandate request. |
+| **TECHNI_STATUS = "01"** | Indicates a validation failure, prompting a specific CBS_ERR_NO. |
+| **CBS_ERR_NO = "3344"** | Validation failure: Missing Unique Reference Number. |
+| **CBS_ERR_NO = "3442"** | Validation failure: Missing Member ID / IFSC. |
+| **CBS_ERR_NO = "199"** | Validation failure: Entry already exists in ACMM (for Create) or ACHT checks. |
+| **CBS_ERR_NO = "108"** | Validation failure: Bank account check digit validation failed. |
+| **CBS_ERR_NO = "8884"** | Validation failure: Mandate amount exceeds limits configured in TReDS or Card tables. |
+## Classes
+### 1. Pain_09_10_main.java & Helper (TimerTask)
+This is the main entry point and scheduler for the application.
+**Responsibilities:**
+ * Initializes log4j2 configurations using decrypted properties.
+ * Schedules the Helper TimerTask to periodically execute processXMLFiles based on configured delay and period parameters.
+ * Scans the source directory, identifies folders containing CREATE, AMEND, or CANCEL in their names, and backs up the entire source folder.
+ * Routes the processing to UpdateTableForCreate, UpdateTableForAmend, or UpdateTableForCancel based on the file name prefix.
+### 2. XML_READER.java & Domain Objects
+Manages the conversion of physical XML files into Java objects.
+**Responsibilities:**
+ * Uses JAXBContext and Unmarshaller to read Pain_09_Document, Pain_10_Document, and Pain_11_document structures.
+ * The domain objects (e.g., MndtInitnReq, GrpHdr, Mndt, Dbtr, Cdtr) strictly map to the ISO 20022 XML schemas using @XmlElement and @XmlAccessorType annotations.
+### 3. UpdateTableForCreate.java
+Processes PAIN 09 Mandate Initiation requests.
+**Responsibilities:**
+ * Extracts mandate attributes such as Debtor Account, Creditor Account, Amount, and Frequency from the unmarshalled PAIN 09 object.
+ * Validates the extracted data (e.g., mandatory fields, account check digits, duplicate UMRN checks against ACHT and ACMM).
+ * Validates limits against the SPONSOR_ALLOW_CARD, TREDS_LIMIT_CARD, and AMOUNT1_CARD tables.
+ * Inserts the processed record into the ACHT table with ACTION set to "C" and STATUS set to "00" on success.
+### 4. UpdateTableForAmend.java
+Processes PAIN 10 Mandate Amendment requests.
+**Responsibilities:**
+ * Extracts amendment attributes and verifies the original UMRN against the ACMM table to ensure the mandate is active (Status "00" or "02").
+ * Inserts the amendment request into the ACHT table with ACTION set to "A".
+### 5. UpdateTableForCancel.java
+Processes PAIN 11 Mandate Cancellation requests.
+**Responsibilities:**
+ * Fetches the original mandate details from the ACMM table using the UMRN.
+ * Inserts the historical state into the ACMH table before updating the mandate status.
+ * Updates the ACMM table with the cancellation reason and status.
+ * Inserts the cancellation record into the ACHT table with ACTION set to "D" and logs the transaction in the MR_LNFT table.
+### 6. Utility.java & Pain10_sequence.java
+Utility classes providing cross-cutting functionalities.
+**Responsibilities:**
+ * **Utility:** Provides aesDecrypt and decrypt1 for AES/GCM/NoPadding cryptography, date formatting, and bank account normalization/padding.
+ * **Pain10_sequence:** Generates a 36-digit sequence number using BigInteger, persisting the state in a local file (Sequence_file_path) and resetting to 1 if it exceeds the maximum limit.
+### 7. ExtractProp.java
+A Singleton configuration manager that loads external deployment properties from Pain10.properties.
+## File Movement and Routing Directory
+During processing, the utility systematically moves files based on validation and insertion results:
+ * **Source Backup:** Before processing, the entire source directory is copied recursively to the Pain_backup_path.
+ * **Processing Success:** If a file is successfully validated and inserted into the database (TECHNI_STATUS = "00"), the XML file and its associated images (_front.tif, _detailfront.jpg) are moved to the respective success directories (succesFolderPathforCreate, succesFolderPathforAmmend, or succesFolderPathforCancel).
+ * **Processing Failure:** If a file fails validation or throws an SQL error, the XML and associated images are moved to the respective failure directories (destinationFailFolderPathCreate, destinationFailFolderPathAmmend, or destinationFailFolderPathCancel).
+ * **Cleanup:** After all files within a specific folder are moved, the empty original folder is deleted from the source path using Files.walkFileTree.
+## Metadata and Configuration Details
+The utility relies on various metadata and parameters defined in the properties file:
+**Validation & Processing Parameters**
+ * **Timer Delay (Timer_Delay):** 10000 milliseconds (10 seconds).
+ * **Timer Period (Timer_Period):** 10000 milliseconds (10 seconds).
+ * **Maximum Sequence (MAX_SEQUENCE):** 999999.
+ * **Sequence File Path (Sequence_file_path):** E:\SAYAN new WORK\Pain_dest\Pain10_sceuence.
+ * **Logger Configuration:** Stored at E:\SAYAN new WORK\LOGS\ under the filename PAIN_LOG.
+ * **Teller ID (tellerId):** 9991.
+**Directory Paths**
+ * **Source Folder Path:** E:\SAYAN new WORK\Pain_09_xmlFiles.
+ * **Backup Path:** E:\SAYAN new WORK\Pain_10_backup\.
+ * **Success Folders:** Located under E:\SAYAN new WORK\Pain_dest\Pain_10_inbetween\ categorized by Create, Ammend, and Cancel.
+ * **Failure Folders:** Located under E:\SAYAN new WORK\Pain_dest\Pain_10_fail\ categorized by Create, Ammend, and Cancel.
+**Zone Configurations**
+ * **WES:** 05076.
+ * **OTH:** 04234.
+ * **NOR:** 04328.
+ * **SOU:** 10395.
+## Database Queries
+Below are the parameterized SQL queries utilized by the PAIN Processing utility, as defined in the metadata properties:
+ * **insertAchtSQL:**
+   Used to insert the extracted mandate creation, amendment, or cancellation details into the ACHT table.
+   INSERT INTO ACHT (INST_NO, ACTION, ACCT_NO, UNQE_REF_NO, SPONS_BANK_IFSC, SPONS_BANK_MICR, UTILITY_CODE, ORGN_SOURCE, MANDATE_REC_DATE, SERVICE_PROVIDER, ACCT_TYPE, CUST_BANK, BRCH_CODE, DRAW_BANK_IFSC, DRAW_BANK_MICR, AMT_IN_FIGURES, AMOUNT_WORDS, CONSUMER_REF_NO, SCHEME_REF_NO, FREQUENCY1, FREQUENCY2, VALIDITY_PERIOD, FROM_DATE, TO_DATE, CUST_NAME, CUSTOMER_ADD_ID, LANDLINE_NO, MOBILE_NO, EMAIL_ID, CATE_CODE, PROPRIETARY, AMND_REASON, CNCL_REASON, REJECT_REASON, TXN_BRCH_NO, TECHNI_STATUS, STATUS_DATE, CCPC_BRCH_NO, ACH_UMRN, DCA_IDENTIFR, ACH_SERL_NO, CBS_ERR_NO, SPNS_BANK_ID, SPNS_LOGN_ID, SPNS_UNIQ_REFNO, TELLER_ID, AMT_DEBIT_TYPE, MAKER_ID, CHECKER_ID, OUTPUT_FILE_NAME,INPUT_FILE_NAME,INPUT_FOLDER_NAME,OUTPUT_FOLDER_NAME,IMAGE_NAME_1,IMAGE_NAME_2,STATUS) VALUES (?, ?, ...)
+ * **getDatafromACMM:**
+   Used during Cancellation (PAIN 11) to fetch all original mandate details using the UMRN.
+   Select * From ACMM where UMRN_NO=?
+ * **checkACMMEntry:**
+   Used during Amend and Create to check if an entry already exists and verify its status.
+   Select ACCT_NO,UMRN_STATUS from ACMM where INST_NO=? and UMRN_NO=?
+ * **fetchACMMforCancel:**
+   Used to select specific fields from the ACMM table for cancellation validations.
+   select UMRN_STATUS, LAST_FILE_DATE, DEBIT_FILE_COUNT, FROM_DATE, UTILITY_CODE, SERVICE_PROVIDER, ACCT_TYPE, ... from ACMM where INST_NO=? and UMRN_NO=? and ACCT_NO=?
+ * **AchtCheckForUMRN:**
+   Used during Mandate Creation (PAIN 09) to ensure the UMRN is not already present in ACHT as an active request.
+   Select count(*) from ACHT where INST_NO='003' and ACH_UMRN=? and ACTION='C' and ORGN_SOURCE='R' and TECHNI_STATUS!='99'
+ * **insertACMH:**
+   Used during Cancellation to log the mandate's historical state into the ACMH table before applying the cancellation update.
+   INSERT INTO ACMH (INST_NO, UMRN_NO, ACCT_NO, UNQE_REF_NO, SPONS_BANK_IFSC, SPONS_BANK_MICR, UTILITY_CODE,MANDATE_REC_DATE, SERVICE_PROVIDER, ... ) VALUES (?, ?, ...)
+ * **updateAcmmForCancel:**
+   Used during Cancellation to update the mandate record in ACMM with the cancellation reason and updated status fields.
+   Update ACMM set CNCL_REASON=?, STATUS_DATE=?, UMRN_STATUS=?, DCA_IDENTIFR=?, UNQE_REF_NO=?, SPONS_BANK_IFSC=?, SPONS_BANK_MICR=?, DRAW_BANK_IFSC=?, DRAW_BANK_MICR=? WHERE INST_NO=? and UMRN_NO=? and ACCT_NO=?
+ * **insertLNFT:**
+   Used during Cancellation to insert a transaction log record into MR_LNFT.
+   INSERT INTO MR_LNFT (ACCOUNT_NUMBER,ACH_UMRN,BRANCH_CODE,STATUS,TELLER_ID,REQUEST_REFERENCE_NO,AUTH_ID,TXN_DATE,ACTION) VALUES (?,?,?,?,?,?,?,?,?)
+ * **checkSponserAllowCard / checkTreds / checkAmount:**
+   Validation queries used during Mandate Creation to check limit configurations in SPONSOR_ALLOW_CARD, TREDS_LIMIT_CARD, and AMOUNT1_CARD.
+ * **fetchRejectionQuery:**
+   Fetches the specific rejection reason from the ACHE table using the mapped CBS_ERR_NO.
+   select ACHE_REJECTION_CODE from ACHE where ACHE_ERROR_CODE=?
+
