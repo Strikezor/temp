@@ -1,0 +1,1569 @@
+package com.tcs.sms.connectionManager;
+
+import java.io.IOException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Properties;
+
+import com.jolbox.bonecp.BoneCP;
+import com.jolbox.bonecp.BoneCPConfig;
+import com.tcs.sms.constants.AadeshConstants;
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+import com.tcs.sms.service.AESdecrypt;
+import com.tcs.sms.service.PropertyFileReader;
+
+import oracle.jdbc.driver.OracleConnection;
+
+public class ConnectionManager {
+
+	public static BoneCP connectionPool = null;
+
+	private static String dbUser, dbPwd, dbUrl;
+	private static int minConn, maxConn, partitionCount, idleMaxAge, idleAgeTestTime;
+	static {
+		System.setProperty("config", "/AadeshApp/JAR/SMS_NOTIFICATION_METADATA/PROPERTY_FILE/");
+//		System.setProperty("config", "E:/Aadesh/Keys/AadesshEISENCCER/AadeshNEKeys/SMSPropertyFile/");
+		
+		String encDbURL = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.DBURL.toString());
+		String encDbUser = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.DBUSER.toString());
+		String encDbPd  = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.DBPWD.toString());
+		String iv1 = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.IV.toString());
+		String key1 = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.Key.toString());
+		
+		try {
+			dbPwd = AESdecrypt.aesDecrypt(key1, iv1, encDbPd);
+			dbUrl = AESdecrypt.aesDecrypt(key1, iv1, encDbURL);
+			dbUser = AESdecrypt.aesDecrypt(key1, iv1, encDbUser);
+		} catch (IOException e) {
+			SmsNotificationLauncher.createLog("Error occured while getting db details");
+		}
+
+		minConn = Integer.parseInt(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.MINCONN.toString()));
+		maxConn = Integer.parseInt(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.MAXCONN.toString()));
+		partitionCount = Integer.parseInt(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.PARTITION_COUNT.toString()));
+		idleMaxAge = Integer.parseInt(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.IDLE_MAX_AGE.toString()));
+		idleAgeTestTime = Integer.parseInt(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), AadeshConstants.IDLE_AGE_TEST_TIME.toString()));	
+
+		
+
+
+	}
+
+	public static void configureConnPool() {
+		try {
+
+			Class.forName("oracle.jdbc.driver.OracleDriver");
+			BoneCPConfig boneCpConfig = new BoneCPConfig();
+			Properties prop = new Properties();
+			prop.setProperty(OracleConnection.CONNECTION_PROPERTY_THIN_NET_ENCRYPTION_LEVEL, "REQUIRED");
+			prop.setProperty(OracleConnection.CONNECTION_PROPERTY_THIN_NET_ENCRYPTION_TYPES, "AES256");
+			prop.setProperty(OracleConnection.CONNECTION_PROPERTY_THIN_NET_CHECKSUM_LEVEL, "REQUIRED");
+			prop.setProperty(OracleConnection.CONNECTION_PROPERTY_THIN_NET_CHECKSUM_TYPES, "SHA256");
+			boneCpConfig.setProperties(prop);
+
+			boneCpConfig.setJdbcUrl(dbUrl);
+			boneCpConfig.setUsername(dbUser);
+			boneCpConfig.setPassword(dbPwd);
+
+			boneCpConfig.setMinConnectionsPerPartition(minConn);
+			boneCpConfig.setMaxConnectionsPerPartition(maxConn);
+			boneCpConfig.setPartitionCount(partitionCount);
+			boneCpConfig.setIdleMaxAgeInMinutes(idleMaxAge);
+			boneCpConfig.setIdleConnectionTestPeriodInMinutes(idleAgeTestTime);
+			
+ 			connectionPool = new BoneCP(boneCpConfig);
+
+		} catch (IOException | ClassNotFoundException e) {
+			SmsNotificationLauncher.createLog("Error while configuring conn pool");
+		} catch (Exception e) {
+			SmsNotificationLauncher.createLog("Error while setting bonecp properties");
+		}
+	}
+
+	public static Connection getConnection() {
+		Connection conn = null;
+		try {
+			conn = getConnectionPool().getConnection();
+
+			conn.setAutoCommit(false);
+		} catch (SQLException e) {
+			SmsNotificationLauncher.createLog("sql exception occured while getting connection");
+		}
+		return conn;
+	}
+
+	public static void shutdownConnectionPool() {
+		BoneCP connPool = ConnectionManager.getConnectionPool();
+		if (connPool != null) {
+			connPool.shutdown();
+		}
+	}
+
+	public static void closeStatement(PreparedStatement stmt) {
+		try {
+			if (stmt != null)
+				stmt.close();
+
+		} catch (SQLException e) {
+			SmsNotificationLauncher.createLog("sql exception occured while closing statement");
+		}
+	}
+
+	public static void closeResultSet(ResultSet rSet) {
+		try {
+			if (rSet != null)
+				rSet.close();
+
+		} catch (SQLException e) {
+			SmsNotificationLauncher.createLog("sql exception occured while closing result set");
+		}
+	}
+
+	public static void closeConnection(Connection conn) {
+		try {
+			if (conn != null) {
+				conn.close();
+				getTotalFreeConn();
+
+			}
+		} catch (SQLException e) {
+			SmsNotificationLauncher.createLog("sql exception occured while closing conneciton");
+		}
+	}
+
+	public static BoneCP getConnectionPool() {
+		return connectionPool;
+	}
+
+	public static void setConnectionPool(BoneCP connectionPool) {
+		ConnectionManager.connectionPool = connectionPool;
+	}
+
+	public static void getTotalFreeConn() {
+
+	}
+
+	public static void commitConnection(Connection c) {
+		try {
+			c.commit();
+
+		} catch (SQLException q) {
+			SmsNotificationLauncher.createLog("sql exception occured while commiting connection");
+		}
+	}
+
+}
+
+
+
+package com.tcs.sms.connectionManager;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.google.gson.Gson;
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+
+public class SM01_Manager {
+
+//	public static String dataReader = "SELECT alertCode,journalNum,customer_no,account_no,sequence,account_Bal,tranCode,tran_date,tran_time,batchTandem,custLang,mobile_no,isd_code,Email_id,smsData FROM SM01 where SMS_FLAG='U'";
+	public static String dataReader = SmsNotificationLauncher.getDataReaderQuery();
+//    public static String sm01update = "update SM01 set SMS_FLAG='P' where SEQUENCE=?";
+	public static String sm01update = SmsNotificationLauncher.getUpdateQuery1();
+//    public static String sm01update2 = "update SM01 set QSTR=? where SEQUENCE=?";
+	public static String sm01update2 = SmsNotificationLauncher.getUpdateQuery2();
+
+	
+
+	public static List<Map<String, String>> fetchDatafromdb() throws SQLException {
+		List<Map<String, String>> dataList = new ArrayList<Map<String, String>>();
+
+		try (Connection con = ConnectionManager.getConnection();
+				PreparedStatement prepareState = con.prepareStatement(dataReader);
+				ResultSet resultSet = prepareState.executeQuery()) {
+
+			while (resultSet.next()) {
+				Map<String, String> row = new LinkedHashMap<String, String>();
+
+
+				row.put("alertCode", resultSet.getString("alertCode"));
+				row.put("journalNum", resultSet.getString("journalNum"));
+				row.put("customer_no", resultSet.getString("customer_no"));
+				row.put("account_no", resultSet.getString("account_no"));
+				row.put("sequence", resultSet.getString("sequence"));
+				row.put("accountBal", resultSet.getString("account_Bal"));
+				row.put("tranCode", resultSet.getString("tranCode"));
+				row.put("tran_date", resultSet.getString("tran_date"));
+				row.put("tran_time", resultSet.getString("tran_time"));
+				row.put("batchTandem", resultSet.getString("batchTandem"));
+				row.put("custLang", resultSet.getString("custLang"));
+				row.put("mobile_no", resultSet.getString("mobile_no"));
+//				row.put("mobile_no", mobNo);
+				row.put("isd_code", resultSet.getString("isd_code"));
+//				row.put("isd_code", isdCode);
+				row.put("Email_id", resultSet.getString("Email_id"));
+				row.put("smsData", resultSet.getString("smsData"));
+				dataList.add(row);
+			}
+		}
+
+		return dataList;
+
+	}
+
+	@SuppressWarnings("finally")
+	public static boolean updateSmo1(String seq) {
+		Connection con = null;
+		boolean update = false;
+		PreparedStatement prepareState = null;
+
+		try {
+
+			con = ConnectionManager.getConnection();
+			prepareState = con.prepareStatement(sm01update);
+
+			prepareState.setObject(1, seq);
+
+			prepareState.executeUpdate();
+
+			con.commit();
+
+			update = true;
+
+		} catch (SQLException e) {
+			SmsNotificationLauncher.createLog("sql exception occured while getting connection");
+		}
+
+		finally {
+			try {
+				if (prepareState != null) {
+					prepareState.close();
+				}
+				if (con != null) {
+					con.close();
+				}
+
+			} catch (SQLException e) {
+				SmsNotificationLauncher.createLog("sql exception occured while closing connection");
+			}
+			return update;
+		}
+
+	}
+
+	public static void updateSm01(String formatedString, String seq) {
+		Connection con = null;
+		// boolean update = false;
+		PreparedStatement prepareState = null;
+
+		try {
+
+			con = ConnectionManager.getConnection();
+			prepareState = con.prepareStatement(sm01update2);
+			prepareState.setObject(1, formatedString);
+			prepareState.setObject(2, seq);
+
+			prepareState.executeUpdate();
+
+			con.commit();
+
+			// update = true;
+
+		} catch (SQLException e) {
+			SmsNotificationLauncher.createLog("sql exception occured while getting connection");
+		}
+
+		finally {
+			try {
+				if (prepareState != null) {
+					prepareState.close();
+				}
+				if (con != null) {
+					con.close();
+				}
+
+			} catch (SQLException e) {
+				SmsNotificationLauncher.createLog("sql exception occured while closing connection");
+			}
+			// return update;
+		}
+	}
+
+}
+
+
+package com.tcs.sms.constants;
+
+public enum AadeshConstants {
+
+	NE_PROPERTY_FILENAME("SMS_Notification"),
+	NE_LOGGER_FILENAME("SMSLogger"),
+	IV("IV"),
+	MINCONN("minConn"),
+	MAXCONN("maxConn"),
+	PARTITION_COUNT("partitionCount"),
+	DBPWD("dbpwd"),
+	DBURL("dburl"),
+	DBUSER("dbuser"),
+	IDLE_MAX_AGE("idleMaxAge"),
+	IDLE_AGE_TEST_TIME("idleAgeTestTime"),
+	Key("Key");
+	
+	private final String text;
+
+    private AadeshConstants(final String text) {
+        this.text = text;
+    }
+
+    @Override
+    public String toString() {
+        return text;
+    }
+
+}
+
+
+
+
+package com.tcs.sms.launcher;
+
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.core.config.Configurator;
+import org.slf4j.LoggerFactory;
+import com.tcs.sms.connectionManager.*;
+import com.tcs.sms.constants.AadeshConstants;
+import com.tcs.sms.main.SmsNotificationStart;
+import com.tcs.sms.service.AESdecrypt;
+import com.tcs.sms.service.PropertyFileReader;
+import com.tcs.sms.service.StringGenerationUtility;
+
+public class SmsNotificationLauncher {
+
+	private static org.slf4j.Logger log = LoggerFactory.getLogger(SmsNotificationLauncher.class);
+
+	public static String hostName;
+	public static String cipherSuite;
+	public static int port;
+	public static Boolean fipsRequired;
+	public static String neCbsQueue;
+	public static String mqStore;
+	public static PrivateKey privateKey;
+	public static PublicKey publicKey;
+	public static String localQMgr;
+	public static String channel;
+	public static String nePubKeyPath;
+	public static String ADPrivKeyPath;
+	public static String dataReaderQuery;
+	public static String updateQuery1;
+	public static String updateQuery2;
+	
+	
+	public static void createLog(String data) {
+		log.info(data);
+	}
+	
+	public static String getUpdateQuery1() {
+		return updateQuery1;
+	}
+
+	public static void setUpdateQuery1(String updateQuery1) {
+		SmsNotificationLauncher.updateQuery1 = updateQuery1;
+	}
+
+	public static String getUpdateQuery2() {
+		return updateQuery2;
+	}
+
+	public static void setUpdateQuery2(String updateQuery2) {
+		SmsNotificationLauncher.updateQuery2 = updateQuery2;
+	}
+
+	public static String getDataReaderQuery() {
+		return dataReaderQuery;
+	}
+
+	public static void setDataReaderQuery(String dataReaderQuery) {
+		SmsNotificationLauncher.dataReaderQuery = dataReaderQuery;
+	}
+
+	static ExecutorService executorService = Executors.newSingleThreadExecutor();
+	public static String getNePubKeyPath() {
+		return nePubKeyPath;
+	}
+
+	public static void setNePubKeyPath(String nePubKeyPath) {
+		SmsNotificationLauncher.nePubKeyPath = nePubKeyPath;
+	}
+
+	public static String getADPrivKeyPath() {
+		return ADPrivKeyPath;
+	}
+
+	public static void setADPrivKeyPath(String aDPrivKeyPath) {
+		ADPrivKeyPath = aDPrivKeyPath;
+	}
+
+	public static String getHostName() {
+		return hostName;
+	}
+
+	public static void setHostName(String hostName) {
+		SmsNotificationLauncher.hostName = hostName;
+	}
+
+	public static String getCipherSuite() {
+		return cipherSuite;
+	}
+
+	public static void setCipherSuite(String cipherSuite) {
+		SmsNotificationLauncher.cipherSuite = cipherSuite;
+	}
+
+	public static int getPort() {
+		return port;
+	}
+
+	public static void setPort(int port) {
+		SmsNotificationLauncher.port = port;
+	}
+
+	public static Boolean getFipsRequired() {
+		return fipsRequired;
+	}
+
+	public static void setFipsRequired(Boolean fipsRequired) {
+		SmsNotificationLauncher.fipsRequired = fipsRequired;
+	}
+
+	public static String getNeCbsQueue() {
+		return neCbsQueue;
+	}
+
+	public static void setNeCbsQueue(String neCbsQueue) {
+		SmsNotificationLauncher.neCbsQueue = neCbsQueue;
+	}
+
+	public static String getMqStore() {
+		return mqStore;
+	}
+
+	public static void setMqStore(String mqStore) {
+		SmsNotificationLauncher.mqStore = mqStore;
+	}
+
+	public static String getLocalQMgr() {
+		return localQMgr;
+	}
+
+	public static void setLocalQMgr(String localQMgr) {
+		SmsNotificationLauncher.localQMgr = localQMgr;
+	}
+
+	public static String getChannel() {
+		return channel;
+	}
+
+	public static void setChannel(String channel) {
+		SmsNotificationLauncher.channel = channel;
+	}
+
+	public static PrivateKey getPrivateKey() {
+		return privateKey;
+	}
+
+	public static void setPrivateKey(PrivateKey privateKey) {
+		SmsNotificationLauncher.privateKey = privateKey;
+	}
+
+	public static PublicKey getPublicKey() {
+		return publicKey;
+	}
+
+	public static void setPublicKey(PublicKey publicKey) {
+		SmsNotificationLauncher.publicKey = publicKey;
+	}
+
+	static {
+
+		System.setProperty("config", "/AadeshApp/JAR/SMS_NOTIFICATION_METADATA/PROPERTY_FILE/");
+//		System.setProperty("config", "D:/Aadesh/Keys/AadesshEISENCCER/AadeshNEKeys/SMSPropertyFile/");
+
+		String path = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"LoggerFilePath");
+		hostName = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), "hostname");
+		port = Integer.parseInt(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), "port"));
+		cipherSuite = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"CIPHER_SUITE");
+		fipsRequired = Boolean.valueOf(PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), "FIPS_REQUIRED"));
+		neCbsQueue = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"NE_ALERT_CBSQ");
+		mqStore = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), "MQ_STORE");
+		localQMgr = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"localQmanager");
+		nePubKeyPath = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"nePublicKeypath");
+		ADPrivKeyPath = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"AdPrivateKeyPath");
+		channel = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(), "channel");
+		dataReaderQuery = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"dataReaderQuery");
+		updateQuery1 = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"updateQuery1");
+		updateQuery2 = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),"updateQuery2");
+		
+
+		try {
+			privateKey = StringGenerationUtility.getPrivateKey(AESdecrypt.aesDecrypt1(ADPrivKeyPath));
+			publicKey = StringGenerationUtility.getPublicKey(AESdecrypt.aesDecrypt1(nePubKeyPath));
+
+			Configurator.initialize(null, path + AadeshConstants.NE_LOGGER_FILENAME.toString() + ".properties");
+
+		} catch (IOException | GeneralSecurityException e) {
+	        log.info("Error fetching keys");
+		}
+		ConnectionManager.configureConnPool();
+
+	}
+
+	public static void main(String[] args) {
+		log.info("******************** || SMS Delivery to Notification Engine Started || ********************");
+		
+		try {
+			ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+			scheduler.scheduleWithFixedDelay(
+			    new SmsNotificationStart(),
+			    0, 
+			    10, 
+			    TimeUnit.SECONDS
+			);   
+		} catch (Exception e) {
+			SmsNotificationLauncher.createLog("Exception occured");
+		}
+	}
+}
+
+
+
+
+package com.tcs.sms.main;
+
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.sql.SQLException;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import org.slf4j.LoggerFactory;
+
+import com.ibm.mq.MQException;
+import com.ibm.mq.MQQueueManager;
+import com.tcs.sms.connectionManager.SM01_Manager;
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+import com.tcs.sms.service.AESdecrypt;
+import com.tcs.sms.service.MQUtil;
+import com.tcs.sms.service.StringGenerationUtility;
+
+public class SmsNotificationStart implements Runnable {
+
+	private static org.slf4j.Logger log = LoggerFactory.getLogger(SmsNotificationLauncher.class);
+
+	private List<Map<String, String>> data = null;
+	private String key;
+	private String IV;
+	private String hash;
+	private String EncryptedString;
+	private String EncryptedHash;
+	private String Encryptedkeys;
+	private String KeyIV;
+	private String neData;
+	MQQueueManager queueManager;
+	private boolean dbupdate;
+
+	public SmsNotificationStart() {
+		super();
+	}
+
+	@Override
+	public void run() {
+
+		MQUtil MQENV = new MQUtil();
+
+		try {
+			//DataBase 
+			data = SM01_Manager.fetchDatafromdb();
+
+		} catch (SQLException e1) {
+
+			log.info("Error while fetching data from db");
+		}
+
+		if (!data.isEmpty()) {
+
+			try {
+				//MQ connection code
+				System.setProperty("javax.net.ssl.trustStore",
+						(AESdecrypt.aesDecrypt1(SmsNotificationLauncher.mqStore)));
+				System.setProperty("javax.net.ssl.trustStorePassword", "password");
+				System.setProperty("com.ibm.mq.cfg.useIBMCipherMappings", "false");
+//				System.setProperty("javax.net.ssl.trustStorePassword", "changeit");
+				System.setProperty("javax.net.ssl.trustStoreType", "JKS");
+				queueManager = MQENV.connectToMQ(SmsNotificationLauncher.getHostName(),
+						SmsNotificationLauncher.getPort(), SmsNotificationLauncher.getChannel(),
+						SmsNotificationLauncher.getFipsRequired(), SmsNotificationLauncher.getCipherSuite(),
+						SmsNotificationLauncher.getLocalQMgr());
+				log.info("Connected to MQ Queue Manager: " + queueManager.getName());
+
+			} catch (IOException | MQException e) {
+				log.info("IO exception occured while setting property");
+			} 
+
+			try {
+
+				for (Map<String, String> row : data) {
+					String formattedString = StringGenerationUtility.fromatData(row);
+					log.info("GENERATED STRING : " + formattedString);
+					hash = StringGenerationUtility.generateHash(formattedString);
+					EncryptedHash = StringGenerationUtility.encryptHash(hash, SmsNotificationLauncher.getPrivateKey());
+					key = StringGenerationUtility.getKEY(32);
+					IV = StringGenerationUtility.getIV(16);
+					EncryptedString = StringGenerationUtility.encryptData(key, IV, formattedString);
+					KeyIV = Base64.getEncoder().encodeToString(key.getBytes()).concat("|*|")
+							.concat(Base64.getEncoder().encodeToString(IV.getBytes()));
+					Encryptedkeys = StringGenerationUtility.encryptWithPublicKey(KeyIV,
+							SmsNotificationLauncher.getPublicKey());
+					neData = EncryptedHash.concat("|*|").concat(Encryptedkeys).concat("|*|").concat(EncryptedString);
+
+					if (queueManager != null) {
+					//if(true) {
+						log.info("ne data :- "+neData);
+						MQENV.sendMessage(queueManager, SmsNotificationLauncher.getNeCbsQueue(), neData);
+						log.info("Message sent: " + neData);
+						dbupdate = SM01_Manager.updateSmo1(row.get("sequence"));
+						SM01_Manager.updateSm01(formattedString,row.get("sequence"));
+						if (dbupdate) {
+							log.info("SM01 is updated for sequence No : " + row.get("sequence"));
+							System.err.println("SM01 is updated for sequence No : " + row.get("sequence"));
+						} else {
+							log.info("Unable to update SM01 for sequence No : " + row.get("sequence"));
+						}
+
+					} else {
+						log.info("Unable to push data to NE end.");
+					}
+
+				}
+
+			} catch (IOException | GeneralSecurityException e) {
+				log.info("exception occured while sending msg");
+			} catch (Exception e) {
+				log.info("Exception occured");
+			} finally {
+				try {
+					queueManager.disconnect();
+					log.info("Data is not available to send. MQ Disconnected Successfully");
+				} catch (MQException e) {
+					log.info("MQ exception occured while disconnecting connection");
+				}
+			}
+
+		} else {
+			log.info("Data is not available to send.");
+			try {
+				Thread.sleep(1000);
+			} catch (InterruptedException e) {
+				log.info("Data not available to send");
+			}
+		}
+
+	}
+
+}
+
+
+
+package com.tcs.sms.service;
+
+import java.io.UnsupportedEncodingException;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.util.Base64;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+//import javax.xml.bind.DatatypeConverter;
+
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.slf4j.LoggerFactory;
+
+import com.tcs.sms.constants.AadeshConstants;
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+
+public class AESdecrypt {
+	private static org.slf4j.Logger log = LoggerFactory.getLogger(SmsNotificationLauncher.class);
+	public static String iv1, key1;
+	static {
+		System.setProperty("config", "/AadeshApp/JAR/SMS_NOTIFICATION_METADATA/PROPERTY_FILE/");
+//		System.setProperty("config", "E:\\Aadesh\\Keys\\AadesshEISENCCER\\AadeshNEKeys\\SMSPropertyFile\\");
+
+		iv1 = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),
+				AadeshConstants.IV.toString());
+		key1 = PropertyFileReader.getPropertyKeyValue(AadeshConstants.NE_PROPERTY_FILENAME.toString(),
+				AadeshConstants.Key.toString());
+	}
+
+	public static String aesDecrypt1(String encrypted) throws UnsupportedEncodingException {
+		byte[] keyb = keyToB(key1);
+		byte[] ivb = keyToB(iv1);
+		String dec = decrypt1(keyb, ivb, encrypted);
+		return dec;
+	}
+
+	public static String decrypt1(byte[] key, byte[] initVector, String encrypted) {
+        try {
+           // IvParameterSpec iv = new IvParameterSpec(initVector);
+             SecretKeySpec skeySpec = new SecretKeySpec(key, "AES");
+           Security.addProvider(new BouncyCastleProvider());
+          GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(16 * 8, initVector);
+          // Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+         //New CR Start:22100077
+           Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+           //NEW CR End:22100077
+          //  cipher.init(Cipher.DECRYPT_MODE, skeySpec, iv);
+            cipher.init(Cipher.DECRYPT_MODE, skeySpec, gcmParameterSpec);
+
+            byte[] original = cipher.doFinal(Base64.getDecoder().decode(encrypted));
+            byte[] notOriginal = new String (original).replaceAll("\0", "").getBytes();
+            return new String(notOriginal);
+        } catch (NoSuchAlgorithmException e) {
+			log.error("Algorithm not found: {}", e);
+		} catch (NoSuchPaddingException e) {
+			log.error("Padding not found: {}", e);
+		} catch (InvalidKeyException e) {
+			log.error("Invalid key: {}", e);
+		} catch (InvalidAlgorithmParameterException e) {
+			log.error("Invalid algorithm parameter: {}", e);
+		} catch (IllegalBlockSizeException e) {
+			log.error("Illegal block size: {}", e);
+		} catch (BadPaddingException e) {
+			log.error("Bad padding: {}", e);
+		} 
+
+        return null;
+    }
+
+	public static byte[] keyToB(String key) throws UnsupportedEncodingException {
+
+		byte[] keybyte = Base64.getDecoder().decode(key.getBytes("UTF-8"));
+
+		return keybyte;
+	}
+	
+	public static String aesDecrypt(String key, String initVector, String encrypted)
+			throws UnsupportedEncodingException {
+		byte[] keyb = keyToB(key);
+		byte[] ivb = keyToB(initVector);
+		String dec = decrypt1(keyb, ivb, encrypted);
+		return dec;
+
+	}
+
+}
+
+
+
+package com.tcs.sms.service;
+
+import java.io.IOException;
+import java.util.Map;
+
+import com.ibm.mq.MQC;
+import com.ibm.mq.MQEnvironment;
+import com.ibm.mq.MQGetMessageOptions;
+import com.ibm.mq.MQMessage;
+import com.ibm.mq.MQPutMessageOptions;
+import com.ibm.mq.MQQueue;
+import com.ibm.mq.MQQueueManager;
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+
+public class MQConnectorService {
+
+
+	public void setEnvironment(String h, String c, int p, boolean i,String j ) {
+		MQEnvironment.hostname = h;
+		MQEnvironment.channel = c;
+		MQEnvironment.port = p;	
+		
+		MQEnvironment.sslFipsRequired=i;
+		MQEnvironment.sslCipherSuite= j;
+	}
+
+public MQQueueManager setQM(String qm) throws Exception {
+	MQQueueManager mqqueuemanager = new MQQueueManager(qm);
+	
+	return mqqueuemanager;
+
+}
+
+public MQQueue setQueueDD(String queue, MQQueueManager qm, int readOptions)
+		throws Exception {
+	MQQueue qout = null;
+
+	qout = qm.accessQueue(queue, readOptions);
+
+	
+	return qout;
+
+}
+
+public MQQueue setQueueWithOptions(String queue, MQQueueManager qm, int queueOptions)
+		throws Exception {
+	MQQueue qin = null;
+
+	qin = qm.accessQueue(queue, queueOptions);
+	
+	return qin;
+
+}
+
+public MQQueue setQueueCQ(String queue, MQQueueManager qm, int options)
+		throws Exception {
+	MQQueue qcpy = null;
+
+	qcpy = qm.accessQueue(queue, options);
+
+	return qcpy;
+}
+
+public MQQueue setQueueError(String queue, MQQueueManager qm, int options)
+		throws Exception {
+	MQQueue qerr = null;
+
+	qerr = qm.accessQueue(queue, options);
+	
+	return qerr;
+}
+
+@SuppressWarnings("deprecation")
+public String getMQMsg(MQQueueManager qm, MQQueue queue) throws Exception {
+	MQGetMessageOptions gmo = new MQGetMessageOptions();
+	
+	gmo.options = MQC.MQGMO_SYNCPOINT | MQC.MQGMO_WAIT
+			| MQC.MQOO_FAIL_IF_QUIESCING;
+	gmo.waitInterval = MQC.MQWI_UNLIMITED;
+	MQMessage message = new MQMessage();
+	queue.get(message, gmo);
+
+	String msg = message.readString(message.getDataLength());
+	return msg;
+
+}
+
+
+@SuppressWarnings({ "unchecked", "deprecation" })
+public Map<String, Object> getMQMap(MQQueueManager qm, MQQueue queue) throws Exception {
+	MQGetMessageOptions gmo = new MQGetMessageOptions();
+	
+	gmo.options = MQC.MQGMO_SYNCPOINT | MQC.MQGMO_WAIT
+			| MQC.MQOO_FAIL_IF_QUIESCING;
+	gmo.waitInterval = MQC.MQWI_UNLIMITED;
+	MQMessage message = new MQMessage();
+	queue.get(message, gmo);
+	
+	Map<String, Object> dMap = (Map<String, Object>) message.readObject();
+	return dMap;
+
+}
+
+@SuppressWarnings("deprecation")
+public void putMQMsg(String msg, MQQueue queue, MQQueueManager qMgrObj) throws Exception {
+	MQPutMessageOptions pmo = new MQPutMessageOptions();
+	pmo.options = MQC.MQPMO_FAIL_IF_QUIESCING + MQC.MQPMO_SYNCPOINT;
+
+	MQMessage message = new MQMessage();
+	message.writeString(msg.trim());
+
+	queue.put(message, pmo);
+	queue.close();
+	qMgrObj.commit();
+	
+
+}
+
+@SuppressWarnings("deprecation")
+public void putObjinMQ(Object obj, MQQueue queue, MQQueueManager qMgrObj) throws Exception {
+	MQPutMessageOptions pmo = new MQPutMessageOptions();
+	pmo.options = MQC.MQPMO_FAIL_IF_QUIESCING + MQC.MQPMO_SYNCPOINT;
+
+	MQMessage message = new MQMessage();
+	message.writeObject(obj);
+
+	queue.put(message, pmo);
+	queue.close();
+	qMgrObj.commit();
+	
+
+}
+
+public MQQueue setQueueWithReadOptions(String queue, MQQueueManager qm, int readOptions)
+		throws Exception {
+	MQQueue qout = null;
+
+	qout = qm.accessQueue(queue, readOptions);
+
+	
+	return qout;
+
+}
+
+public boolean messagePutMQ(MQConnectorService mqHandler, MQQueueManager qMgrObj,
+		int queueOptions, String queueName, String smsMessage) {
+	try {
+		MQQueue queueNeftFresh = mqHandler.setQueueWithOptions(queueName, qMgrObj,
+				queueOptions);
+		mqHandler.putMQMsg(smsMessage, queueNeftFresh, qMgrObj);
+		qMgrObj.commit();
+		return true;
+	} catch (Exception e) {
+		SmsNotificationLauncher.createLog("Exception occured while putting msg in mq");
+		return false;
+	}
+}
+
+
+public boolean putMapinMQ(MQConnectorService mqHandler, MQQueueManager qMgrObj,
+		int queueOptions, String queueName, Object object) {
+	try {
+		MQQueue queueNeftFresh = mqHandler.setQueueWithOptions(queueName, qMgrObj,
+				queueOptions);
+		mqHandler.putObjinMQ(object, queueNeftFresh, qMgrObj);
+		qMgrObj.commit();
+		return true;
+	} catch (Exception e) {
+		SmsNotificationLauncher.createLog("Exception while putting map in mq");
+		return false;
+	}
+}
+
+
+
+
+}
+
+
+
+
+
+package com.tcs.sms.service;
+
+import org.slf4j.LoggerFactory;
+
+import com.ibm.mq.MQEnvironment;
+import com.ibm.mq.MQException;
+import com.ibm.mq.MQMessage;
+import com.ibm.mq.MQQueue;
+import com.ibm.mq.MQQueueManager;
+import com.ibm.mq.constants.MQConstants;
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+
+
+public class MQUtil {
+	
+	private static org.slf4j.Logger log = LoggerFactory.getLogger(SmsNotificationLauncher.class);
+
+	public MQQueueManager connectToMQ(String hostname, int port, String channel, boolean sslFipsRequired,
+			String sslCipherSuite,String qmanager) {
+		log.info(hostname+" "+port+" "+channel+" "+sslCipherSuite+" "+qmanager);
+		MQEnvironment.hostname = hostname;
+		MQEnvironment.port = port;
+		MQEnvironment.channel = channel;
+		MQEnvironment.sslFipsRequired = sslFipsRequired;
+		MQEnvironment.sslCipherSuite = sslCipherSuite;
+
+		MQQueueManager queueManager = null;
+		try {
+
+			queueManager = new MQQueueManager(qmanager);
+			
+			
+			
+		} catch (MQException e) {
+			log.info("MQException");
+		}
+		return queueManager;
+	}
+
+	public void sendMessage(MQQueueManager queueManager, String queueName, String messageText) {
+		MQQueue queue = null;
+
+		try {
+
+			queue = queueManager.accessQueue(queueName, MQConstants.MQOO_OUTPUT);
+
+			MQMessage message = new MQMessage();
+			message.writeString(messageText);
+
+			queue.put(message);
+			
+		} catch (MQException | java.io.IOException e) {
+			log.info("MQException");
+		} finally {
+
+			try {
+				if (queue != null)
+					queue.close();
+			} catch (MQException e) {
+				log.info("MQException");
+			}
+		}
+	}
+
+}
+
+
+
+
+
+package com.tcs.sms.service;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Enumeration;
+import java.util.Properties;
+import java.util.ResourceBundle;
+
+public class PropertyFileReader {
+
+	private static Properties propertyValCache = new Properties();
+
+	public static String getPropertyKeyValue(String propertyFileName, String keyName) {
+		String keyValue = (String) propertyValCache.get(keyName);
+		if (keyValue == null) {
+			loadPropertyFiles(propertyFileName);
+			keyValue = (String) propertyValCache.get(keyName);
+		}
+		return keyValue;
+	}
+
+	@SuppressWarnings("unused")
+	public static void loadPropertyFiles(String propertyFileName) {
+
+		String home = System.getenv("config");
+		if (home == null || home.equalsIgnoreCase(""))
+			home = System.getProperty("config");
+
+		if (home == null || home.equalsIgnoreCase("")) {
+			ResourceBundle connProperties = null;
+			try {
+				connProperties = ResourceBundle.getBundle(propertyFileName);
+			} catch (Exception mre) {
+
+				mre.getMessage();
+
+			}
+
+			Properties prop = new Properties();
+
+			Enumeration<String> keys = connProperties.getKeys();
+			while (keys.hasMoreElements()) {
+				String key = keys.nextElement();
+				prop.put(key, connProperties.getString(key));
+			}
+
+			propertyValCache = prop;
+		} else {
+
+			Properties prop = new Properties();
+			InputStream inputStream = null;
+			String propertyVal = null;
+
+			try {
+				if (home.endsWith("/")) {
+					File file = new File(home + propertyFileName + ".properties");
+					inputStream = new FileInputStream(file);
+				} else {
+					File file = new File(home + propertyFileName + ".properties");
+					inputStream = new FileInputStream(file);
+				}
+
+				prop.load(inputStream);
+
+				propertyValCache = prop;
+			} catch (FileNotFoundException ex) {
+
+				ex.getMessage();
+
+			} catch (IOException ex) {
+
+				ex.getMessage();
+
+			} finally {
+				if (inputStream != null) {
+					try {
+						inputStream.close();
+						inputStream = null;
+					} catch (IOException e) {
+
+						e.getMessage();
+
+					}
+				}
+			}
+
+		}
+
+	}
+
+	public static Properties getPropertiesofFile(String fileName, String filepath) {
+
+		Properties prop = new Properties();
+		InputStream inputStream = null;
+
+		try {
+			if (filepath.endsWith("/")) {
+				File file = new File(filepath + fileName + ".properties");
+				inputStream = new FileInputStream(file);
+			} else {
+				File file = new File(filepath + "/" + fileName + ".properties");
+				inputStream = new FileInputStream(file);
+			}
+
+			prop.load(inputStream);
+
+		} catch (FileNotFoundException ex) {
+
+			ex.getMessage();
+
+		} catch (IOException ex) {
+
+			ex.getMessage();
+
+		} finally {
+			if (inputStream != null) {
+				try {
+					inputStream.close();
+					inputStream = null;
+				} catch (IOException e) {
+
+					e.getMessage();
+
+				}
+			}
+		}
+		return prop;
+	}
+
+
+
+}
+
+
+
+
+
+
+package com.tcs.sms.service;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.KeyFactory;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Base64;
+import java.util.Calendar;
+import java.util.Map;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import com.tcs.sms.launcher.SmsNotificationLauncher;
+//import javax.xml.bind.DatatypeConverter;
+
+public class StringGenerationUtility {
+
+	public static String generateHash(String hashData) {
+		MessageDigest md = null;
+		StringBuilder generatedHash = new StringBuilder();
+		try {
+			md = MessageDigest.getInstance("SHA-256");
+			byte hash[] = md.digest(hashData.getBytes(StandardCharsets.UTF_8));
+			for (int i = 0; i < hash.length; i++) {
+				generatedHash.append(String.format("%02x", hash[i]));
+			}
+		} catch (NoSuchAlgorithmException e) {
+			e.getMessage();
+		}
+		return generatedHash.toString();
+	}
+
+	public static String getCbsGenTime() {
+		DateFormat format = new SimpleDateFormat("HH:mm:ss");
+		Calendar cal = Calendar.getInstance();
+		return format.format(cal.getTime());
+	}
+
+	public static String getKEY(int Keylength) {
+		String AlphaNumericString = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "0123456789" + "abcdefghijklmnopqrstuvxyz";
+		StringBuilder sb = new StringBuilder(Keylength);
+		for (int i = 0; i < Keylength; i++) {
+			int index = (int) (AlphaNumericString.length() * Math.random());
+			sb.append(AlphaNumericString.charAt(index));
+		}
+
+		return sb.toString();
+	}
+
+	public static String getIV(int IVlength) {
+		String AlphaNumericString = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "0123456789" + "abcdefghijklmnopqrstuvxyz";
+		StringBuilder sb = new StringBuilder(IVlength);
+		for (int i = 0; i < IVlength; i++) {
+			int index = (int) (AlphaNumericString.length() * Math.random());
+			sb.append(AlphaNumericString.charAt(index));
+		}
+		return sb.toString();
+	}
+
+	//No need
+//	public static String encryptData(String key, String initVector, String data) {
+//		try {
+//			IvParameterSpec ivspec = new IvParameterSpec((initVector.getBytes("UTF-8")));
+//			SecretKeySpec skeySpec = new SecretKeySpec((key.getBytes("UTF-8")), "AES");
+//
+//			Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+//			cipher.init(Cipher.ENCRYPT_MODE, skeySpec, ivspec);
+//
+//			byte[] encrypted = cipher.doFinal(data.getBytes());
+//			return DatatypeConverter.printBase64Binary(encrypted);
+//
+//		} catch (Exception ex) {
+//
+//		}
+//
+//		return null;
+//	}
+
+	
+	///////GCM/////////
+//	public static String encryptData(String key, String initVector, String data) {
+//		try {
+//			GCMParameterSpec ivspec = new GCMParameterSpec(16*8,(initVector.getBytes("UTF-8")));
+//			SecretKeySpec skeySpec = new SecretKeySpec((key.getBytes("UTF-8")), "AES");
+//
+//			Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+//			cipher.init(Cipher.ENCRYPT_MODE, skeySpec, ivspec);
+//
+//			byte[] encrypted = cipher.doFinal(data.getBytes());
+//			return java.util.Base64.getEncoder().encodeToString(encrypted);
+//
+//		} catch (Exception ex) {
+//
+//		}
+//
+//		return null;
+//	}
+	
+	
+	
+	///////CBC////////
+	public static String encryptData(String key, String initVector, String data) {
+        try {
+            // Convert key and IV to bytes
+            byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
+            byte[] ivBytes = initVector.getBytes(StandardCharsets.UTF_8);
+
+            // AES key must be 128, 192, or 256 bits -> 16, 24, or 32 bytes
+            SecretKeySpec secretKey = new SecretKeySpec(keyBytes, "AES");
+
+            // IV must match block size (16 bytes for AES)
+            IvParameterSpec ivSpec = new IvParameterSpec(ivBytes);
+
+            // Create Cipher instance for AES/CBC/PKCS5Padding
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec);
+
+            // Encrypt the data
+            byte[] encryptedBytes = cipher.doFinal(data.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(encryptedBytes);
+
+        } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | BadPaddingException | InvalidKeyException | InvalidAlgorithmParameterException ex) {
+        	SmsNotificationLauncher.createLog("Exception occured in encrypting string");
+            return null;
+        }
+    }
+	public static RSAPrivateKey getPrivateKey(String filename) throws IOException, GeneralSecurityException {
+		String privateKeyPEM = getKey(filename);
+		return getPrivateKeyFromString(privateKeyPEM);
+	}
+
+	public static RSAPrivateKey getPrivateKeyFromString(String key) throws IOException, GeneralSecurityException {
+		String privateKeyPEM = key;
+		privateKeyPEM = privateKeyPEM.replace("-----BEGIN PRIVATE KEY-----", "").trim();
+		privateKeyPEM = privateKeyPEM.replace("-----END PRIVATE KEY-----", "").trim();
+		byte[] encoded = Base64.getMimeDecoder().decode(privateKeyPEM);
+		KeyFactory kf = KeyFactory.getInstance("RSA");
+		PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(encoded);
+		RSAPrivateKey privKey = (RSAPrivateKey) kf.generatePrivate(keySpec);
+		return privKey;
+	}
+
+	private static String getKey(String filename) throws IOException {
+
+		String strKeyPEM = "";
+		BufferedReader br = new BufferedReader(new FileReader(filename));
+		String line;
+		while ((line = br.readLine()) != null) {
+			strKeyPEM += line + "\n";
+		}
+		br.close();
+		return strKeyPEM;
+	}
+
+	public static RSAPublicKey getPublicKey(String filename) throws IOException, GeneralSecurityException {
+		String publicKeyPEM = getKey(filename);
+		return getPublicKeyFromString(publicKeyPEM);
+	}
+
+	public static RSAPublicKey getPublicKeyFromString(String key) throws IOException, GeneralSecurityException {
+		String publicKeyPEM = key;
+		publicKeyPEM = publicKeyPEM.replace("-----BEGIN PUBLIC KEY-----\n", "").trim();
+		publicKeyPEM = publicKeyPEM.replace("-----END PUBLIC KEY-----", "").trim();
+		byte[] encoded = Base64.getMimeDecoder().decode(publicKeyPEM);
+		KeyFactory kf = KeyFactory.getInstance("RSA");
+		RSAPublicKey pubKey = (RSAPublicKey) kf.generatePublic(new X509EncodedKeySpec(encoded));
+		return pubKey;
+	}
+
+	public static String encryptHash(String rawText, PrivateKey privtaekey)
+			throws IOException, GeneralSecurityException {
+		Cipher cipher = Cipher.getInstance("RSA");
+		cipher.init(Cipher.ENCRYPT_MODE, privtaekey);
+		return Base64.getEncoder().encodeToString(cipher.doFinal(rawText.getBytes(StandardCharsets.UTF_8)));
+	}
+
+	public static String encryptWithPublicKey(String plainText, PublicKey publicKey) throws Exception {
+		Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPwithSHA1andMGF1Padding");
+		cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+		byte[] encryptedBytes = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
+		return Base64.getEncoder().encodeToString(encryptedBytes);
+	}
+
+	public static String fromatData(Map<String, String> row) {
+		String journal_Num = row.getOrDefault("journalNum", "");
+		if (journal_Num == null) {
+			int zero = 9;
+			journal_Num = formatStringLength(zero, journal_Num);
+		} else {
+			if (journal_Num.length() < 9) {
+				int zerosToAdd = 0;
+
+				zerosToAdd = 9 - journal_Num.length();
+
+				journal_Num = formatStringLength(zerosToAdd, journal_Num);
+			}
+		}
+
+		String Customer_No = row.getOrDefault("customer_no", "");
+		if (Customer_No != null)
+			if (Customer_No.length() < 17) {
+
+				int zerosToAdd = 17 - Customer_No.length();
+
+				Customer_No = formatStringLength(zerosToAdd, Customer_No);
+			} else {
+				int zerosToAdd = 17;
+				Customer_No = formatStringLength(zerosToAdd, Customer_No);
+			}
+		String Account_no = row.getOrDefault("account_no", "");
+		if (Account_no.length() < 17) {
+			int zerosToAdd = 0;
+			if (Account_no.isEmpty()) {
+				zerosToAdd = 17;
+			} else {
+				zerosToAdd = 17 - Account_no.length();
+			}
+			Account_no = formatStringLength(zerosToAdd, Account_no);
+		}
+
+		String Sequence = row.getOrDefault("sequence", "");
+		if (Sequence.length() < 9) {
+			int zerosToAdd = 9 - Sequence.length();
+			Sequence = formatStringLength(zerosToAdd, Sequence);
+		}
+
+		String Account_bal = row.getOrDefault("accountBal", "");
+		Account_bal = formatAccountBalance(Account_bal);
+
+		String tran_code = row.getOrDefault("tranCode", "");
+		if (tran_code != null) {
+			if (tran_code.length() < 6) {
+
+				int zerosToAdd = 6 - tran_code.length();
+
+				tran_code = formatStringLength(zerosToAdd, tran_code);
+			}
+		} else {
+			int zerosToAdd = 6;
+			tran_code = formatStringLength(zerosToAdd, tran_code);
+		}
+
+		String basedata = String.format("%s^%s^%s^%s^%s^%s^%s^%s^%s^%s^%s^%s^%s^%s", row.getOrDefault("alertCode", ""),
+				journal_Num, Customer_No, Account_no, Sequence, Account_bal, tran_code,
+				row.getOrDefault("tran_date", ""), row.getOrDefault("tran_time", ""),
+				row.getOrDefault("batchTandem", ""), row.getOrDefault("custLang", ""),
+				row.getOrDefault("mobile_no", ""), row.getOrDefault("isd_code", ""), row.getOrDefault("Email_id", ""));
+
+		String smsdata = row.getOrDefault("smsData", "");
+		String ParsedSmsData = parseSmsData(smsdata);
+		String gentime = StringGenerationUtility.getCbsGenTime();
+
+		return gentime + "^" + basedata + "^" + ParsedSmsData + "^";
+	}
+
+	public static String formatAccountBalance(String balance) {
+		if (balance == null) {
+			int zeroestoadd = 17;
+			String s = formatStringLength(zeroestoadd, balance);
+			return s;
+		} else {
+			// Replace the decimal point with '0'
+			balance = balance.replace(".", "0");
+
+			// Ensure the balance is 18 characters long with leading zeros
+			StringBuilder sb = new StringBuilder();
+			while (sb.length() + balance.length() < 17) {
+				sb.append("0");
+			}
+
+			// Append the modified balance
+			sb.append(balance);
+
+			// Append the '+' sign at the end
+			sb.append("+");
+			return sb.toString();
+		}
+
+	}
+
+	public static String formatStringLength(int zerosToAdd, String str) {
+		StringBuilder leadingZeros = new StringBuilder();
+		for (int i = 0; i < zerosToAdd; i++) {
+			leadingZeros.append("0");
+		}
+		if (str == null) {
+			str = "";
+		}
+		str = leadingZeros.toString() + str;
+		return str;
+	}
+
+	private static String parseSmsData(String smsData) {
+		if (smsData == null || smsData.isEmpty()) {
+			return "";
+		}
+
+		StringBuilder parseData = new StringBuilder();
+		String[] tokens = smsData.split("\\,");
+		for (String token : tokens) {
+			if (token.contains(":")) {
+				parseData.append(token).append("^");
+			}
+		}
+
+		if (parseData.length() > 0 && parseData.charAt(parseData.length() - 1) == '^') {
+			parseData.setLength(parseData.length() - 1);
+		}
+		{
+
+		}
+		return parseData.toString();
+	}
+
+}
+
+
+
+
+LoggerFilePath=E:\\Aadesh\\Keys\\AadesshEISENCCER\\AadeshNEKeys\\SMSPropertyFile\\
+################# DB DETAILS #############################
+IV=AYEFyTcSaPmewXc+JPsGZA==
+Key=tIPr6vE4nRwzVHeIsApDO9N5Lo5lohB5XZTlirh1yvA=
+
+dburl=rc4VBZ2ZKk1h5R4u6pS2rSKcpCkmJfo7kb4ojagnbAhUF9i7oFY90w1uT2C0Oocn
+dbpwd=LkvuENJBDHqvB9khkybN6g==
+dbuser=kC+iNZDowHlWInjooMgI6A==
+idleMaxAge=60
+idleAgeTestTime=30
+minConn=5
+maxConn=10
+partitionCount=2
+
+CBS_HEADER=genTime,alertCode,journalNum,customer_no,account_no,sequence,accountBal,tranCode,txndate,txnstarttime,batchTandem,custLang,mobile_no,isd_code,email_id,smsData
+
+
+################## MQ DETAILS #############################
+threadSleepInterval=3
+hostname=10.189.43.66
+channel=RO.SVRCONN
+RO_channel=RO.SVRCONN
+RI_channel=RI.SVRCONN
+NO_channel=NO.SVRCONN
+NI_channel=NI.SVRCONN
+port=1605
+localQmanager=CBSLITE
+FIPS_REQUIRED=false
+CIPHER_SUITE=TLS_RSA_WITH_AES_256_CBC_SHA
+MQ_STORE=GHxdrNE/PrdXMvRH7oPFWLQDIOcLc6CJmqo88zz29NXdqqXeTsYf3HImrNZ8Vwj7zhUTpMcEriIbrZKlDLSZhw==
+################ QUEUE NAMES #############################
+
+NE_ALERT_CBSQ=AADESHQ01
+
+################## ENCRYPTION #############################
+nePublicKeypath=GHxdrNE/PrdXMvRH7oPFWLQDIOcLc6CJmqo88zz29NXdqqXeTsYf3HImrNZ8Vwj7Kfe56kVDTp7+4qeYLsPqyt9CpGEQb32fb0WSyRhQXg0=
+AdPrivateKeyPath=GHxdrNE/PrdXMvRH7oPFWLQDIOcLc6CJmqo88zz29NXdqqXeTsYf3HImrNZ8Vwj75engmEZ4G4ymMPgKHJAyH16ejARF2ZQLGwRGYvJfxfI=
+
+
+CBS_MOBILE_HEADER=Date,identifier,cif_acc_no,mobile_no,old_mobile_no,isd_code,old_isd_code,cif_acc_branch,email_id,teller_id,custLang,verificationFlag,smsData
+
+
+
