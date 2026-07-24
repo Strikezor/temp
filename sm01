@@ -1,0 +1,864 @@
+package com.tcs.sbi.launcher;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.util.Base64;
+import java.util.Timer;
+import java.util.TimerTask;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.Configurator;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+import com.tcs.sbi.update_connection.update_connection;
+import com.tcs.sbi.update_service.ExtractProp;
+//import com.tcs.sms.constants.AadeshConstants;
+//import com.tcs.sms.service.PropertyFileReader;
+
+public class Update_launcher {
+	private static final String Timer_Delay = ExtractProp.getInstance().getExtractProperty("Timer_Delay");
+	private static final String Timer_Period = ExtractProp.getInstance().getExtractProperty("Timer_Period");
+	private static final String logger_path = ExtractProp.getInstance().getExtractProperty("Logger_path");
+	private static final String logger_name = ExtractProp.getInstance().getExtractProperty("Logger_FileName");
+	private static final String cbsUrl = ExtractProp.getInstance().getExtractProperty("cbsUrl");;
+	private static Logger log = null;
+
+	public static String getCbsUrl() {
+		return cbsUrl;
+	}
+
+	static {
+		Configurator.initialize(null, logger_path + logger_name + ".properties");
+		log = LogManager.getLogger(Update_launcher.class);
+	}
+
+//	private static final Logger log = LogManager.getLogger(Update_launcher.class);
+	public static void main(String[] args) {
+		log.info("Insert in SM01 started");
+		long Delay = Long.parseLong(Timer_Delay);
+		long Period = Long.parseLong(Timer_Period);
+		Timer timer = new Timer();
+		TimerTask task = new Helper();
+
+		timer.schedule(task, Delay, Period);
+
+	}
+}
+
+class Helper extends TimerTask {
+	private static String DB_URL = ExtractProp.getInstance().getExtractProperty("DB_URL");
+	private static String USER = ExtractProp.getInstance().getExtractProperty("USER");
+	private static String PASS = ExtractProp.getInstance().getExtractProperty("PASS");
+	private static final String Key = ExtractProp.getInstance().getExtractProperty("Key");
+	private static final String IV = ExtractProp.getInstance().getExtractProperty("IV");
+
+	private static final String Selection_Query = ExtractProp.getInstance().getExtractProperty("SelectSQL");
+	private String action = null;
+	private String acct_no = null;
+	private String ref_no = null;
+	private static final Logger log = LogManager.getLogger(Update_launcher.class);
+
+	static {
+		try {
+			DB_URL = aesDecrypt(Key, IV, DB_URL);
+			USER = aesDecrypt(Key, IV, USER);
+			PASS = aesDecrypt(Key, IV, PASS);
+		} catch (UnsupportedEncodingException ue) {
+			log.info("Error when getting value from property file ", ue);
+		}
+	}
+
+	@Override
+	public void run() {
+		if (filesExist()) {
+			update_connection updateCon = new update_connection();
+			updateCon.findFilesforMandate(action, acct_no, ref_no);
+		} else {
+			log.info("No files to process");
+		}
+	}
+
+	private boolean filesExist() {
+		try (Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);) {
+			PreparedStatement selectStmt = conn.prepareStatement(Selection_Query);
+			LocalDate d=LocalDate.now();
+			selectStmt.setObject(1, d);
+			ResultSet rs = selectStmt.executeQuery();
+
+//			log.info("1111");
+			if (rs.next()) {
+				action = rs.getString("ACTION");
+				acct_no = rs.getString("Acct_no");
+				ref_no = rs.getString("Unqe_ref_no");
+				return true;
+			} else {
+				return false;
+			}
+		} catch (SQLException e) {
+			log.error("SQL EXCEPTION in finding file from DB" + e);
+		}
+		return false;
+	}
+
+	public static String aesDecrypt(String key, String initVector, String encrypted)
+			throws UnsupportedEncodingException {
+		byte[] keyb = keyToB(key);
+		byte[] ivb = keyToB(initVector);
+		String dec = decrypt1(keyb, ivb, encrypted);
+		return dec;
+	}
+
+	public static String decrypt1(byte[] key, byte[] initVector, String encrypted) {
+		try {
+			// IvParameterSpec iv = new IvParameterSpec(initVector);
+			SecretKeySpec skeySpec = new SecretKeySpec(key, "AES");
+			Security.addProvider(new BouncyCastleProvider());
+			GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(16 * 8, initVector);
+			// Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+			Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+			// cipher.init(Cipher.DECRYPT_MODE, skeySpec, iv);
+			cipher.init(Cipher.DECRYPT_MODE, skeySpec, gcmParameterSpec);
+
+			byte[] original = cipher.doFinal(Base64.getDecoder().decode(encrypted));
+			byte[] notOriginal = new String(original).replaceAll("\0", "").getBytes();
+			return new String(notOriginal);
+		} catch (NoSuchAlgorithmException e) {
+			log.error("Algorithm not found: {}", e);
+		} catch (NoSuchPaddingException e) {
+			log.error("Padding not found: {}", e);
+		} catch (InvalidKeyException e) {
+			log.error("Invalid key: {}", e);
+		} catch (InvalidAlgorithmParameterException e) {
+			log.error("Invalid algorithm parameter: {}", e);
+		} catch (IllegalBlockSizeException e) {
+			log.error("Illegal block size: {}", e);
+		} catch (BadPaddingException e) {
+			log.error("Bad padding: {}", e);
+		}
+
+		return null;
+	}
+
+	public static byte[] keyToB(String key) throws UnsupportedEncodingException {
+
+		byte[] keybyte = Base64.getDecoder().decode(key.getBytes("UTF-8"));
+
+		return keybyte;
+	}
+}
+
+
+
+
+
+
+
+
+package com.tcs.sbi.update_connection;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Type;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import com.tcs.sbi.launcher.Update_launcher;
+import com.tcs.sbi.update_service.ExtractProp;
+import com.tcs.sbi.update_service.Update_service;
+
+public class update_connection {
+	private static final Logger log = LogManager.getLogger(Update_launcher.class);
+	private static String DB_URL = ExtractProp.getInstance().getExtractProperty("DB_URL");
+	private static String USER = ExtractProp.getInstance().getExtractProperty("USER");
+	private static String PASS = ExtractProp.getInstance().getExtractProperty("PASS");
+	private static final String Key = ExtractProp.getInstance().getExtractProperty("Key");
+	private static final String IV = ExtractProp.getInstance().getExtractProperty("IV");
+	// private static final String SelectSQL =
+	// ExtractProp.getInstance().getExtractProperty("SelectSQL");
+	private static final String SelectSQL2 = ExtractProp.getInstance().getExtractProperty("SelectSQL2");
+	private static final String insertSQL = ExtractProp.getInstance().getExtractProperty("insertSQL");
+	private static final String UpdateSQL = ExtractProp.getInstance().getExtractProperty("UpdateSQL");
+	private static final String UpdateSQL2 = ExtractProp.getInstance().getExtractProperty("UpdateSQL2");
+	private static final String UpdateSQL3 = ExtractProp.getInstance().getExtractProperty("UpdateSQL3");
+	
+	static {
+		try {
+			DB_URL = aesDecrypt(Key, IV, DB_URL);
+			USER = aesDecrypt(Key, IV, USER);
+			PASS = aesDecrypt(Key, IV, PASS);
+		} catch (UnsupportedEncodingException ue) {
+			log.info("Error when getting value from property file ", ue);
+		}
+	}
+	
+	public static class MobileNumber {
+		private String isdCode;
+		private String mobNo;
+		private String cifNo;
+		private String verificationFlag;
+		private String error_code;
+		private String error_description;
+
+		public String getVerificationFlag() {
+			return verificationFlag;
+		}
+
+		public void setVerificationFlag(String verificationFlag) {
+			this.verificationFlag = verificationFlag;
+		}
+
+		public String getCifNo() {
+			return cifNo;
+		}
+
+		public void setCifNo(String cifNo) {
+			this.cifNo = cifNo;
+		}
+
+		public String getIsdCode() {
+			return isdCode;
+		}
+
+		public String getMobNo() {
+			return mobNo;
+		}
+
+		public void setIsdCode(String isdCode) {
+			this.isdCode = isdCode;
+		}
+
+		public void setMobNo(String mobNo) {
+			this.mobNo = mobNo;
+		}
+
+		public String getError_code() {
+			return error_code;
+		}
+
+		public void setError_code(String error_code) {
+			this.error_code = error_code;
+		}
+
+		public String getError_description() {
+			return error_description;
+		}
+
+		public void setError_description(String error_description) {
+			this.error_description = error_description;
+		}
+
+	}
+
+	public static MobileNumber getMobileFromCBS(String ACCT_NO) {
+		MobileNumber mb = new MobileNumber();
+		Gson gson = new Gson();
+
+		try {
+			String urlString = Update_launcher.getCbsUrl();
+
+			// Create request payload
+			Map<String, String> requestMap = new HashMap<>();
+			requestMap.put("CIF_ACCOUNT_NUMBER", ACCT_NO);
+			String jsonInputString = gson.toJson(requestMap);
+
+			// Send HTTP request
+			HttpClient client = HttpClient.newHttpClient();
+			HttpRequest request = HttpRequest.newBuilder().uri(URI.create(urlString))
+					.header("Content-Type", "application/json; utf-8").header("Accept", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(jsonInputString)).build();
+
+			HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+			if (response.statusCode() == 200) {
+				String jsonResponse = response.body();
+
+				Type responseType = new TypeToken<Map<String, String>>() {
+				}.getType();
+				Map<String, String> responseMap = gson.fromJson(jsonResponse, responseType);
+
+				if (responseMap.get("RESPONSE_STATUS").equals("0")) {
+					if (responseMap != null && responseMap.containsKey("ISD_CODE")
+							&& responseMap.containsKey("MOBILE_NUMBER") && responseMap.containsKey("CIF_NO")) {
+						String extractedIsd = responseMap.get("ISD_CODE");
+						String extractedOldIsd = responseMap.get("OLD_ISD_CODE");
+						String extractedMobileNo = responseMap.get("MOBILE_NUMBER");
+						String extractedOldMobileNo = responseMap.get("OLD_MOBILE_NUMBER");
+						String extractedCifNo = responseMap.get("CIF_NO");
+						String verificationFlag = responseMap.get("VERIFICATION_FLAG");
+//						log.info(extractedIsd + " " + extractedOldIsd + " " +extractedMobileNo+ " " +extractedOldMobileNo+ " " +extractedCifNo+ " " +verificationFlag);
+						if (extractedCifNo.length() == 17) {
+							extractedCifNo = extractedCifNo.substring(6);
+						}
+						List<String> validFlags = Arrays.asList("Y", "E", "S");
+						List<String> invalidFlags = Arrays.asList("N", "X");
+						
+						if(invalidFlags.contains(verificationFlag)){
+							extractedIsd = extractedOldIsd;
+							extractedMobileNo = extractedOldMobileNo;
+						} else if(!validFlags.contains(verificationFlag)){
+							extractedIsd="";
+							extractedMobileNo="";
+						}
+						
+						mb.setIsdCode(extractedIsd != null ? extractedIsd : "");
+						mb.setMobNo(extractedMobileNo != null ? extractedMobileNo : "");
+						mb.setCifNo(extractedCifNo != null ? extractedCifNo : "");
+					} else {
+						log.info("API response doesn't contain the required fields");
+					}
+				} else {
+					String ex_error_code = responseMap.get("ERROR_CODE");
+					String ex_error_description = responseMap.get("ERROR_DESCRIPTION");
+					mb.setError_code(ex_error_code != null ? ex_error_code : "");
+					mb.setError_description(ex_error_description != null ? ex_error_description : "");
+				}
+			} else {
+				log.info("API request failed to fetch mobile number: " + response.statusCode());
+			}
+
+		} catch (IOException e) {
+			log.info("Error calling API to get mobile number: " + e.getMessage());
+		} catch (InterruptedException e) {
+			log.info("Interrupted exception occurred");
+			Thread.currentThread().interrupt(); // Reset interrupt status
+		} catch (NumberFormatException e) {
+			log.info("Incorrect length of Cif/Mobile No");
+		}
+
+		return mb;
+	}
+
+	public String getParamConstructforTA(String action, String Umrn, String Mandate_amount, String Corp_name) {
+		log.info("Preparing the SMSdata for TA");
+		String Sms = "";
+		Sms += "P05:";
+		String P05;
+		if (action.equals("A")) {
+			P05 = "Amendment-";
+		} else if (action.equals("C")) {
+			P05 = "Registration-";
+		} else {
+			P05 = "Cancellation-";
+		}
+		Sms += P05.substring(0,
+				Math.min(P05.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P05"))));
+		Sms += "^P27:";
+		Sms += Umrn.substring(0,
+				Math.min(Umrn.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P27"))));
+		Sms += "^P02:";
+		Sms += Mandate_amount.substring(0, Math.min(Mandate_amount.length(),
+				Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P02"))));
+		Sms += "^P23:";
+		Sms += Corp_name.substring(0,
+				Math.min(Corp_name.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P23"))));
+		log.info("TA SMSdata: " + Sms);
+		return Sms;
+	}
+
+	public String getDate() {
+//		log.info("getting the current date");
+		LocalDateTime now = LocalDateTime.now();
+		DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+		String tran_date = now.format(dateFormatter);
+		return tran_date;
+	}
+
+	public String getTime() {
+//		log.info("getting the current time");
+		LocalDateTime now = LocalDateTime.now();
+		DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("HHmmss");
+		String tran_time = now.format(dateFormatter);
+		return tran_time;
+	}
+	
+	public static String aesDecrypt(String key, String initVector, String encrypted)
+			throws UnsupportedEncodingException {
+		byte[] keyb = keyToB(key);
+		byte[] ivb = keyToB(initVector);
+		String dec = decrypt1(keyb, ivb, encrypted);
+		return dec;
+	}
+	public static String decrypt1(byte[] key, byte[] initVector, String encrypted) {
+        try {
+           // IvParameterSpec iv = new IvParameterSpec(initVector);
+             SecretKeySpec skeySpec = new SecretKeySpec(key, "AES");
+           Security.addProvider(new BouncyCastleProvider());
+          GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(16 * 8, initVector);
+          // Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+           Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+          //  cipher.init(Cipher.DECRYPT_MODE, skeySpec, iv);
+            cipher.init(Cipher.DECRYPT_MODE, skeySpec, gcmParameterSpec);
+
+            byte[] original = cipher.doFinal(Base64.getDecoder().decode(encrypted));
+            byte[] notOriginal = new String (original).replaceAll("\0", "").getBytes();
+            return new String(notOriginal);
+        } catch (NoSuchAlgorithmException e) {
+			log.error("Algorithm not found: {}", e);
+		} catch (NoSuchPaddingException e) {
+			log.error("Padding not found: {}", e);
+		} catch (InvalidKeyException e) {
+			log.error("Invalid key: {}", e);
+		} catch (InvalidAlgorithmParameterException e) {
+			log.error("Invalid algorithm parameter: {}", e);
+		} catch (IllegalBlockSizeException e) {
+			log.error("Illegal block size: {}", e);
+		} catch (BadPaddingException e) {
+			log.error("Bad padding: {}", e);
+		} 
+
+        return null;
+    }
+	
+	public static byte[] keyToB(String key) throws UnsupportedEncodingException {
+
+		byte[] keybyte = Base64.getDecoder().decode(key.getBytes("UTF-8"));
+
+		return keybyte;
+	}
+	public static boolean isDigitOnly(String str) {
+		for (int i = 0; i < str.length(); i++) {
+	        if (!Character.isDigit(str.charAt(i))) {
+	            return false;
+	        }
+	    }
+	    return true;
+	}
+
+	public void findFilesforMandate(String action, String acct_no, String unqe_ref_no) {
+		try {
+			log.info("SM01_table_update process started for reference number:- " + unqe_ref_no);
+			// Load the Oracle JDBC driver
+			Class.forName("oracle.jdbc.driver.OracleDriver");
+
+			// Establish the connection
+			Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+			PreparedStatement selectStmt = conn.prepareStatement(SelectSQL2);
+			selectStmt.setString(1, action);
+			selectStmt.setString(2, acct_no);
+			selectStmt.setString(3, unqe_ref_no);
+			ResultSet rs = selectStmt.executeQuery();
+			String Tran_Date = null;
+			String Tran_Time = null;
+			String sms_status = null;
+			String Acct_no = "0", Alert_code = null, Alert_code_desc = null, Tran_amt = "0", Sms_flag = null,
+					Sms_data = null, MOBILE_NO = "0", ISD_CODE = null, EMAIL_ID = null;
+			int Sequence = 0;
+			if (rs.next()) {
+				log.info("Extracting the required values from ACHT for SM01_table_updation");
+				Tran_Date = getDate();
+				Tran_Time = getTime();
+				Acct_no = rs.getString("Acct_no");
+				sms_status = rs.getString("STATUS");
+				String Techni_status = rs.getString("TECHNI_STATUS");
+				if (action.equalsIgnoreCase("D")) {
+					Alert_code = "TA";
+				} else {
+					if (sms_status.equalsIgnoreCase("45")) {
+						Alert_code = "TA";
+					} else {
+						if (Techni_status.equalsIgnoreCase("03")) {
+							Alert_code = "MR";
+						} else if (Techni_status.equalsIgnoreCase("04")) {
+							Alert_code = "MA";
+						} else if (Techni_status.equalsIgnoreCase("02")) {
+							Alert_code = "TA";
+						}
+					}
+				}
+				MOBILE_NO = "0";
+//				ISD_CODE = rs.getString("ISD_CODE");
+				EMAIL_ID = rs.getString("EMAIL_ID");
+				Alert_code_desc = "Mandate";
+				Tran_amt = rs.getString("Amt_in_figures");
+				Sms_flag = "U";
+				String Umrn = rs.getString("Ach_umrn");
+				String Mandate_amount = Tran_amt;
+				String Corp_name = rs.getString("Service_provider");
+				String reject_reason = rs.getString("REJECT_REASON");
+				if (Alert_code == "MR") {
+					Sms_data = getParamConstructforMR(action, Umrn, Mandate_amount, Corp_name, reject_reason);
+				} else if (Alert_code == "MA") {
+					Sms_data = getParamConstructforMA(action, Umrn, Mandate_amount, Corp_name);
+				} else if (Alert_code == "TA") {
+					Sms_data = getParamConstructforTA(action, Umrn, Mandate_amount, Corp_name);
+				}
+
+				log.info(Tran_Date + " " + Tran_Time + " " + Acct_no + " " + Alert_code + " " + Alert_code_desc + " "
+						+ Tran_amt + " " + Sms_flag + " " + Sms_data + " " + Sequence);
+
+				Update_service sec = new Update_service();
+				Sequence = sec.getSequence();
+
+//---------------------------------Getting mob no from cbs-------------------------------------------------
+				String CIF_NO = "0";
+//				if (MOBILE_NO == null || ISD_CODE == null) {
+				MobileNumber cbsData = getMobileFromCBS(Acct_no);
+				if (cbsData != null && cbsData.getMobNo() != null) {
+					ISD_CODE = cbsData.getIsdCode();
+					MOBILE_NO = cbsData.getMobNo();
+					CIF_NO = cbsData.getCifNo();
+				} else {
+					log.info("Failed to get mob no from cbs");
+				}
+//				}
+
+				// Trim once and store result
+				String trimmedMobile = "";
+				if (MOBILE_NO != null) {
+					trimmedMobile = MOBILE_NO.trim();
+				}
+				int length = trimmedMobile.length();
+
+//				if (length == 14) {
+//					MOBILE_NO = trimmedMobile.substring(4); // Remove first 4 chars (e.g., +91-)
+//				} 
+				
+				if(isDigitOnly(trimmedMobile)) {
+					if (length == 12 && trimmedMobile.substring(0, 2).equals("91")) {
+						MOBILE_NO = trimmedMobile.substring(2);
+					} else if (length == 11 && trimmedMobile.substring(0, 1).equals("0")) {
+						MOBILE_NO = trimmedMobile.substring(1);
+					} else if (length == 10) {
+						MOBILE_NO = trimmedMobile;
+					} else {
+						MOBILE_NO = "0";
+					}
+				} else {
+					MOBILE_NO = "0";
+				}
+				if (ISD_CODE == null || ISD_CODE.equals("") || ISD_CODE.equals(" ")) {
+					ISD_CODE = "91";
+				}
+				if (CIF_NO == null || CIF_NO.equals("") || CIF_NO.equals(" ")) {
+					CIF_NO = "0";
+				}
+				if (MOBILE_NO == null || MOBILE_NO.equals("") || MOBILE_NO.equals(" ")) {
+					MOBILE_NO = "0";
+				}
+				try {
+					Acct_no = Acct_no.trim().substring(0, Math.min(Acct_no.length(), 16));
+				} catch (NumberFormatException | StringIndexOutOfBoundsException e) {
+					log.info("Invalid acct no");
+				}
+				if (MOBILE_NO == null || MOBILE_NO == "0")
+					Sms_flag = "X";
+				PreparedStatement insertStmt = conn.prepareStatement(insertSQL);
+				insertStmt.setString(1, Alert_code);
+				insertStmt.setString(2, Alert_code_desc);
+				insertStmt.setNull(3, java.sql.Types.VARCHAR);
+				insertStmt.setLong(4, Long.parseLong(CIF_NO));
+				insertStmt.setLong(5, Long.parseLong(Acct_no.trim()));
+				insertStmt.setString(6, EMAIL_ID);
+				insertStmt.setInt(7, Sequence);
+				insertStmt.setDouble(8, Double.parseDouble(Tran_amt));
+				insertStmt.setString(9, Sms_flag);
+				insertStmt.setNull(10, java.sql.Types.INTEGER);
+				insertStmt.setNull(11, java.sql.Types.VARCHAR);
+				insertStmt.setNull(12, java.sql.Types.VARCHAR);
+				insertStmt.setNull(13, java.sql.Types.VARCHAR);
+				insertStmt.setNull(14, java.sql.Types.VARCHAR);
+				insertStmt.setString(15, MOBILE_NO);
+				insertStmt.setString(16, ISD_CODE);
+				insertStmt.setString(17, Sms_data);
+				insertStmt.setInt(18, Integer.parseInt(Tran_Date));
+				insertStmt.setInt(19, Integer.parseInt(Tran_Time));
+				insertStmt.setNull(20, java.sql.Types.VARCHAR);
+
+				int rowsAffected = insertStmt.executeUpdate();
+				log.info("Rows inserted: " + rowsAffected);
+
+				if (sms_status.equalsIgnoreCase("41")) {
+					PreparedStatement updateStmt = conn.prepareStatement(UpdateSQL);
+					updateStmt.setString(1, action);
+					updateStmt.setString(2, acct_no);
+					updateStmt.setString(3, unqe_ref_no);
+					int ans = updateStmt.executeUpdate();
+					if (ans > 0)
+						log.info("ACHT status updated");
+					else
+						log.info("ACHT status did not updated");
+				} else if (sms_status.equalsIgnoreCase("43")) {
+					PreparedStatement updateStmt = conn.prepareStatement(UpdateSQL2);
+					updateStmt.setString(1, action);
+					updateStmt.setString(2, acct_no);
+					updateStmt.setString(3, unqe_ref_no);
+					int ans = updateStmt.executeUpdate();
+					if (ans > 0)
+						log.info("ACHT status updated");
+					else
+						log.info("ACHT status did not updated");
+				} else if (sms_status.equalsIgnoreCase("45")) {
+					PreparedStatement updateStmt = conn.prepareStatement(UpdateSQL3);
+					updateStmt.setString(1, action);
+					updateStmt.setString(2, acct_no);
+					updateStmt.setString(3, unqe_ref_no);
+					int ans = updateStmt.executeUpdate();
+					if (ans > 0)
+						log.info("ACHT status updated");
+					else
+						log.info("ACHT status did not updated");
+				}
+			} else {
+				log.info("There are no data for such values");
+			}
+
+			// String insertSQL="Insert into SM01
+			// (ALERTCODE,ALARTCODEDESC,JOURNALNUM,CUSTOMER_NO,ACCOUNT_NO,EMAIL_ID,SEQUENCE,TRAN_AMT,SMS_FLAG,TRANCODE,ERROR_CODE,ERROR_MESSAGE,BATCHTANDEM,CUSTLANG,MOBILE_NO,ISD_CODE,SMSDATA,TRAN_DATE,TRAN_TIME,QSTR)
+			// values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+			// Close the connection
+			conn.close();
+		} catch (ClassNotFoundException e) {
+			log.error("Oracle JDBC Driver not found.");
+		} catch (SQLException e) {
+			log.error("Connection failed: " + e.getMessage());
+		}
+	}
+
+	public String getParamConstructforMA(String action, String Umrn, String Mandate_amount, String Corp_name) {
+		log.info("Preparing the SMSdata for MA");
+		String sms = "";
+		sms += "P27:";
+		sms += Umrn.substring(0,
+				Math.min(Umrn.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P27"))));
+		sms += "^P02:";
+		sms += Mandate_amount.substring(0, Math.min(Mandate_amount.length(),
+				Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P02"))));
+		sms += "^P23:";
+		sms += Corp_name.substring(0,
+				Math.min(Corp_name.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P23"))));
+		sms += "^P05:";
+		String P05;
+		if (action.equals("A")) {
+			P05 = "Amended.";
+		} else if (action.equals("C")) {
+			P05 = "Created.";
+		} else {
+			P05 = "Cancelled.";
+		}
+		sms += P05.substring(0,
+				Math.min(P05.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P05"))));
+		log.info("MA SMSdata: " + sms);
+		return sms;
+
+	}
+
+	public String getParamConstructforMR(String action, String Umrn, String Mandate_amount, String Corp_name,
+			String reject_reason) {
+		log.info("Preparing the SMSdata for MR");
+		String sms = "";
+		sms += "P05:";
+		String P05;
+		if (action.equals("A")) {
+			P05 = "Amended";
+		} else if (action.equals("C")) {
+			P05 = "Created";
+		} else {
+			P05 = "Cancelled";
+		}
+		sms += P05.substring(0,
+				Math.min(P05.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P05"))));
+		sms += "^P27:";
+		sms += Umrn.substring(0,
+				Math.min(Umrn.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P27"))));
+		sms += "^P02:";
+		sms += Mandate_amount.substring(0, Math.min(Mandate_amount.length(),
+				Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P02"))));
+		sms += "^P23:";
+		sms += Corp_name.substring(0,
+				Math.min(Corp_name.length(), Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P23"))));
+		sms += "^P25:";
+		sms += reject_reason.substring(0, Math.min(reject_reason.length(),
+				Integer.parseInt(ExtractProp.getInstance().getExtractProperty("P25"))));
+		log.info("MR SMSdata: " + sms);
+		return sms;
+
+	}
+}
+
+
+
+
+
+
+
+package com.tcs.sbi.update_service;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
+public class ExtractProp {
+    //private static final Logger logger = (Logger) LogManager.getLogger(ExtractProperties.class);
+    private static final String EXTRACT_PROPERTIES_FILE = "/AadeshApp/JAR/SM01_table_updation_MetaData/PROPERTY_FILE/SM01_Update.properties";
+//    private static final String EXTRACT_PROPERTIES_FILE = "D:\\Sayan_Adesh_works\\SM01_table_updationnn\\src\\com\\tcs\\sbi\\update_service\\Update.properties";
+    
+    private static ExtractProp instance = new ExtractProp();
+    private String propertyValue = null;
+    Properties extractProp = null;
+
+    private ExtractProp() {
+        loadProperties();
+    }
+
+    private void loadProperties() {
+        InputStream bisExtract = null;
+        try {
+            bisExtract = new FileInputStream(EXTRACT_PROPERTIES_FILE);
+            this.extractProp = new Properties();
+            this.extractProp.load(bisExtract);
+        } catch (FileNotFoundException e) {
+            //logger.error("Unable to load properties file: " + e.getMessage());
+        } catch (IOException e) {
+            //logger.error("Error occurred while loading properties file: " + e.getMessage());
+        } finally {
+            closeExtractProperty(bisExtract);
+        }
+    }
+    
+    public void closeExtractProperty(InputStream bisExtract) {
+        try {
+            if (bisExtract != null) {
+                bisExtract.close();
+            }
+        } catch (IOException e) {
+            //logger.error("Unable to close InputStream: " + e.getMessage());
+        }
+    }
+    
+    public String getExtractProperty(String key) {
+        this.propertyValue = this.extractProp.getProperty(key);
+        return this.propertyValue;
+    }
+
+    public int getExtractPropertyAsInt(String key) {
+        String value = this.extractProp.getProperty(key);
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            //logger.error("Error converting property value to int for key: " + key + ", value: " + value);
+            return 0; // or throw an exception based on your error handling strategy
+        }
+    }
+    
+    public static ExtractProp getInstance() {
+        return instance;
+    }
+}
+
+
+
+
+
+
+package com.tcs.sbi.update_service;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.tcs.sbi.launcher.Update_launcher;
+
+public class Update_service {
+	private static final Logger log = LogManager.getLogger(Update_service.class);
+	private static final int MAX_SEQUENCE = ExtractProp.getInstance().getExtractPropertyAsInt("MAX_SEQUENCE");
+	private static final String SEQUENCE_FILE_PATH = ExtractProp.getInstance().getExtractProperty("Sequence_file_path");
+	public int getSequence(){
+		log.info("Getting the sequence number");
+		int sequenceNumber = readSequenceNumber();
+		
+        // Ensure sequence number is within the valid range
+        if (sequenceNumber > 999999) {
+            sequenceNumber = 1; // Reset to 1 after reaching the maximum value
+        }
+        
+        saveSequenceNumber(sequenceNumber + 1);
+		return sequenceNumber;
+	}
+	private static int readSequenceNumber() {
+        try {
+            // Check if the sequence file exists
+            File sequenceFile = new File(SEQUENCE_FILE_PATH);
+            if (!sequenceFile.exists()) {
+                // If the file doesn't exist, create it with an initial sequence number of 1
+                saveSequenceNumber(1);
+                return 1;
+            } 
+            // Read the sequence number from the file
+            String sequenceStr = new String(Files.readAllBytes(Paths.get(SEQUENCE_FILE_PATH))).trim();
+            
+            return Integer.parseInt(sequenceStr);
+        } catch (IOException | NumberFormatException e) {
+            log.info("Error occured while reading sequence number");
+            // In case of any error, return 1 as the default sequence number
+            return 1;
+        }
+    }
+
+    // Method to save the updated sequence number to the file
+    private static void saveSequenceNumber(int sequenceNumber) {
+    	
+        try (FileWriter writer = new FileWriter(SEQUENCE_FILE_PATH)) {
+            writer.write(String.valueOf(sequenceNumber));
+        } catch (IOException e) { 
+            log.info("Error occured while saving sequence number");
+        }
+    }
+}
