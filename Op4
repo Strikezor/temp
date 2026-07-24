@@ -165,3 +165,8 @@ A highly scalable sequence generator.
 A Singleton configuration manager.
  * **Initialization:** Loads runtime configuration parameters from the local Pain10.properties file using a FileInputStream.
  * **Data Access:** Exposes getExtractProperty(String key) and getExtractPropertyAsInt(String key) for the rest of the application to consume settings like database credentials, API configurations, and file paths.
+
+
+
+## Summary
+The PAIN 09, 10, and 11 XML Processing Module automates the ingestion, validation, and database integration of mandate creation, amendment, and cancellation requests. It utilizes a scheduled timer task to continuously read eligible XML files from the source directories and unmarshals the payloads using the JAXB framework. The module extracts critical mandate details and validates parameters such as UMRN uniqueness, bank account check digits, and sponsor bank limits. Based on the validation results, the transaction is marked as a success (TECHNI_STATUS="00") or failure (TECHNI_STATUS="01"), and the records are inserted or updated across core database tables including ACHT, ACMM, ACMH, and MR_LNFT. This module ensures reliable execution by systematically routing processed XML files and associated image attachments to designated success or failure directories, maintaining strict data integrity and fault tolerance throughout the lifecycle.
