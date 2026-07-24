@@ -973,3 +973,53 @@ public class ExtractProp {
 		return instance;
 	}
 }
+
+
+
+
+########################## START OF IR 26060127
+#DB_URL=jdbc:oracle:thin:@10.177.135.146:1535:STDB3
+#USER=Aadeshdbst
+#PASS=Aadeshdbst
+DB_URL=AopOKYFgLM2BSL7YcTXAkpMIFrxaegD5m9evrhc4ddVHKCQWCI7GGNcx0el3i9LDdXAS7hUVhXE8M+c0jDJtdQ==
+USER=KY9IL8hnOs5Mzss3lmJ7eM48EiuV5lrd
+PASS=KY9IL8hnOs5Mzss3lmJ7eM48EiuV5lrd
+IV=AYEFyTcSaPmewXc+JPsGZA==
+Key=tIPr6vE4nRwzVHeIsApDO9N5Lo5lohB5XZTlirh1yvA=
+########################## END OF IR 26060127
+
+Selection_Query=Select ACTION,ACCT_NO,UNQE_REF_NO,TECHNI_STATUS,SPONS_BANK_IFSC,SPONS_BANK_MICR,DRAW_BANK_IFSC,DRAW_BANK_MICR,REJECT_REASON,ACH_UMRN,TXN_BRCH_NO From ACHT Where TECHNI_STATUS IN ('01', '03', '04') and STATUS IN ('41','42','44','46') Fetch First 1 rows only
+Update_SQL=Update ACHT Set TECHNI_STATUS=?,STATUS_DATE=? Where ACTION=? AND ACCT_NO=? AND UNQE_REF_NO=?
+Update_Query=Update ACHT Set OUTPUT_FILE_NAME=? Where ACTION=? AND ACCT_NO=? AND UNQE_REF_NO=?
+Select_IFSC=Select BANK_NAME from ifsc where IFSC_CODE=?
+
+SEQUENCE_FILE_PATH_CR=/AadeshApp/JAR/Pain12_Metadata/File_sequence.txt
+MAX_SEQUENCE=999999
+
+PROCESS_NAME=MMS
+TRANS_TYPE=ACCEPT
+BANK_IDENTIFIER=SBIN
+EXTRA=OTH
+LOGIN_ID=SBIN2835487
+EXTRA2=INP
+SBIN=SBIN1234
+DATE_FORMAT=yyyyMMdd
+
+04791=WES
+04114=SOU
+04234=OTH
+00437=OTH
+04000=OTH
+00518=OTH
+05848=OTH
+15600=OTH
+69914=OTH
+
+Logger_path=/AadeshApp/JAR/Pain12_Metadata/PropertyFiles/
+Logger_FileName=log4j2
+
+Timer_Delay=5000
+Timer_Period=10000
+AMEND_FILE_PATH=/AadeshApp/JAR/MandateEncryption/SourceFiles/AMEND/
+CREATE_FILE_PATH=/AadeshApp/JAR/MandateEncryption/SourceFiles/CREATE/
+CANCEL_FILE_PATH=/AadeshApp/JAR/MandateEncryption/SourceFiles/CANCEL/
