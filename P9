@@ -1,0 +1,4678 @@
+package com.sbi.tcs.pain_09.table_updation.main;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
+//import java.io.IOException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Timer;
+import java.util.TimerTask;
+
+//import javax.xml.bind.JAXBException;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.Configurator;
+
+import com.sbi.tcs.pain10Util.ExtractProp;
+import com.sbi.tcs.pain10Util.Pain10_sequence;
+
+import jakarta.xml.bind.JAXBException;
+
+public class Pain_09_10_main {
+	private static final String Timer_Delay = ExtractProp.getInstance().getExtractProperty("Timer_Delay");
+    private static final String Timer_Period = ExtractProp.getInstance().getExtractProperty("Timer_Period");
+	private static final String logger_path = ExtractProp.getInstance().getExtractProperty("Logger_path");
+    private static final String logger_name = ExtractProp.getInstance().getExtractProperty("Logger_FileName");
+    private static final String Pain_backup_path = ExtractProp.getInstance().getExtractProperty("Pain_backup_path");
+    private static Logger log=null;
+    static {	    
+	    Configurator.initialize(null, logger_path +logger_name + ".properties");
+	    	log = LogManager.getLogger(Pain_09_10_main.class);  
+    }
+	public static void main(String[] args) {
+		log.info("Xml to data base process started");
+
+		long Delay =Long.parseLong(Timer_Delay);
+    	long Period =Long.parseLong(Timer_Period);
+    	Timer timer =new Timer();
+		TimerTask task=new Helper();
+		
+		timer.schedule(task,Delay,Period);
+	}
+	
+
+	public static void processXMLFiles(String sourceFolderPath, String destinationFailFolderPathAmmend,String destinationFailFolderPathCreate,
+			String succesFolderPathforAmmend,String succesFolderPathforCreate,String destinationFailFolderPathCancel,String succesFolderPathforCancel) {
+		File sourceFolder = new File(sourceFolderPath);
+		File destinationFailFolderAmmend = new File(destinationFailFolderPathAmmend);
+		File destinationFailFolderCreate = new File(destinationFailFolderPathCreate);
+		File destinationSuccessFolder = new File(succesFolderPathforAmmend);
+		File destinationSuccessFolderForCreate = new File(succesFolderPathforCreate);
+		File destinationFailFolderCancel = new File(destinationFailFolderPathCancel);
+		File destinationSuccessFolderForCancel = new File(succesFolderPathforCancel);
+
+		// Check if source folder exists and is a directory
+		if (!sourceFolder.exists() || !sourceFolder.isDirectory()) {
+			log.info("Source folder does not exist or is not a directory.");
+			return;
+		}
+
+		// Check if destination folder exists, if not create it
+		if (!destinationFailFolderAmmend.exists()) {
+			destinationFailFolderAmmend.mkdirs();
+		}
+		
+		if (!destinationFailFolderCreate.exists()) {
+			destinationFailFolderCreate.mkdirs();
+		}
+
+		if (!destinationSuccessFolder.exists()) {
+			destinationSuccessFolder.mkdirs();
+		}
+
+		File[] directories = sourceFolder.listFiles(File::isDirectory);
+		if (directories != null) {
+			for (File dir : directories) {
+				Path sourcepath = dir.toPath();
+				Path destinationpath = Paths.get(Pain_backup_path+ dir.getName());
+				if (!Files.exists(destinationpath)) {
+					try {
+						
+						Files.createDirectories(destinationpath);
+						log.info("directory for copy folder created");
+					} catch (IOException e) {
+						log.error("IoException ocuured");
+					}
+				}
+
+				// Walk through the source directory and copy each file and subdirectory
+				try {
+					Files.walk(sourcepath).forEach(sourcePath -> {
+						Path destinationPath = destinationpath.resolve(sourcepath.relativize(sourcePath));
+						try {
+							if (Files.isDirectory(sourcePath)) {
+								// Create the directory in the target location
+								Files.createDirectories(destinationPath);
+							} else {
+								// Copy the file to the target location
+								Files.copy(sourcePath, destinationPath, StandardCopyOption.REPLACE_EXISTING);
+								
+							}
+							
+						} catch (IOException e) {
+							log.error("Failed to copy " + sourcePath + ": " + e.getMessage()+"for foldername:-"+dir.getName());
+						}
+					});  
+					log.info(dir.getName()+" Succesfully copied in the backup folder");
+				} catch (IOException e1) {
+					log.error("IoException ocuured");
+				}
+				// Check if the directory name contains "Ammend"
+				String folderName=dir.getName();
+				String[] dirName = dir.getName().split("-");
+				int datedir = Integer.parseInt(dirName[3]);
+				int daydir = datedir / 1000000;
+				int monthdir = (datedir % 1000000) / 10000;
+				String yeardir = Integer.toString(datedir % 10000);
+				if (dir.getName().contains("AMEND") && dir.getName().contains("MMS") && dir.getName().contains("SBIN")
+						&& daydir <= 31 && monthdir <= 12 && yeardir.length() == 4) {
+					log.info("folder found for Pain10"+folderName);
+					
+					File[] files = dir.listFiles((d, name) -> name.endsWith(".xml"));
+					if (files != null) {
+						for (File file : files) {
+							log.info("Xml File found for process, File name: "+file.getName()+" in Folder: "+folderName);
+							String[] FileName = file.getName().split("-");
+							int date = Integer.parseInt(FileName[4]);
+							int day = date / 1000000;
+							int month = (date % 1000000) / 10000;
+							String year = Integer.toString(date % 10000);
+							//log.info(day + "   " + month + "  " + year);
+
+							if (FileName[0].equals("MMS") && FileName[1].equals("AMEND")
+									&& FileName[6].equals("INP.xml") && day <= 31 && month <= 12
+									&& year.length() == 4) {
+								log.info("Validation completed for File Name: "+file.getName());
+								XML_READER xmlReader = new XML_READER();
+								try {
+									Pain_10_Document data = xmlReader.readXml10(file);
+
+									if (data != null && data.getMndtAmdmntReq() != null
+											&& data.getMndtAmdmntReq().getGrpHdr() != null) {
+
+										String fileName = file.getName();
+										String immagename1 = fileName.substring(0, fileName.length() - 8)
+												+ "_front.tif";
+										String immagename11 = fileName.substring(0, fileName.length() - 8)
+												+ "_front.tiff";
+										String immagename2 = fileName.substring(0, fileName.length() - 8)
+												+ "_detailfront.jpg";
+										String immagename22 = fileName.substring(0, fileName.length() - 8)
+												+ "_detailfront.jpeg";
+
+										File immage1 = null, immage2 = null;
+										File[] imageFiles = dir.listFiles();
+										for (File file2 : imageFiles) {
+											if (file2.getName().equalsIgnoreCase(immagename1)) {
+												immage1 = file2;
+											} else if (file2.getName().equalsIgnoreCase(immagename11)) {
+												immage1 = file2;
+											} else if (file2.getName().equalsIgnoreCase(immagename2)) {
+												immage2 = file2;
+											} else if (file2.getName().equalsIgnoreCase(immagename22)) {
+												immage2 = file2;
+											}
+										}
+
+										if (immage1 != null) {
+											immagename1 = immage1.getName();
+										} else {
+											immagename1 = " ";
+										}
+
+										if (immage2 != null) {
+											immagename2 = immage2.getName();
+										} else {
+											immagename2 = " ";
+										}
+
+										UpdateTableForAmend.updateTableWithDocument(data, fileName, dir.getName(), immagename1, immagename2,
+												destinationFailFolderAmmend, destinationSuccessFolder, dir);
+
+									} else {
+										log.info("Data or required fields are null.");
+									}
+								} catch (JAXBException e) {
+									log.error("Some error happend in XML file: "+file.getName());
+								}
+
+							} else {
+								log.info("Validation failed for file: "+file.getName());
+							}
+						}
+					} else {
+						log.info("No files found in Folder: "+folderName);
+					}
+				} else if (dir.getName().contains("CREATE")&& dir.getName().contains("MMS") && dir.getName().contains("SBIN")
+						&& daydir <= 31 && monthdir <= 12 && yeardir.length() == 4) {
+					log.info("Folder found for Pain_09 method: "+folderName);
+					File[] files = dir.listFiles((d, name) -> name.endsWith(".xml"));
+					if (files != null) {
+						for (File file : files) {
+							log.info("Xml File found for process, File name: "+file.getName()+" in Folder: "+folderName);
+							String[] FileName = file.getName().split("-");
+							int date = Integer.parseInt(FileName[4]);
+							int day = date / 1000000;
+							int month = (date % 1000000) / 10000;
+							String year = Integer.toString(date % 10000);
+							//log.info(day + "   " + month + "  " + year);
+
+							if (FileName[0].equals("MMS") && FileName[1].equals("CREATE")
+									&& FileName[6].equals("INP.xml") && day <= 31 && month <= 12
+									&& year.length() == 4) {
+								log.info("Validation completed for File Name: "+file.getName());
+								XML_READER xmlReader = new XML_READER();
+								try {
+									Pain_09_Document data = xmlReader.readXml9(file);
+									if (data != null && data.getMndtInitnReq() != null
+											&& data.getMndtInitnReq().getGrpHdr() != null) {
+									String fileName = file.getName();
+									String immagename1 = fileName.substring(0, fileName.length() - 8)
+											+ "_front.tif";
+									String immagename11 = fileName.substring(0, fileName.length() - 8)
+											+ "_front.tiff";
+									String immagename2 = fileName.substring(0, fileName.length() - 8)
+											+ "_detailfront.jpg";
+									String immagename22 = fileName.substring(0, fileName.length() - 8)
+											+ "_detailfront.jpeg";
+
+									File immage1 = null, immage2 = null;
+									File[] imageFiles = dir.listFiles();
+									for (File file2 : imageFiles) {
+										if (file2.getName().equalsIgnoreCase(immagename1)) {
+											immage1 = file2;
+										} else if (file2.getName().equalsIgnoreCase(immagename11)) {
+											immage1 = file2;
+										} else if (file2.getName().equalsIgnoreCase(immagename2)) {
+											immage2 = file2;
+										} else if (file2.getName().equalsIgnoreCase(immagename22)) {
+											immage2 = file2;
+										}
+									}
+
+									if (immage1 != null) {
+										immagename1 = immage1.getName();
+									} else {
+										immagename1 = " ";
+									}
+
+									if (immage2 != null) {
+										immagename2 = immage2.getName();
+									} else {
+										immagename2 = " ";
+									}
+									UpdateTableForCreate update=new UpdateTableForCreate();
+									update.updateTableWithDocument2(data,file.getName(),dir.getName(),immagename1,immagename2,destinationFailFolderCreate,destinationSuccessFolderForCreate,dir);
+									} else {
+										log.info("Data or required fields are null.");
+									}
+									
+								} catch (JAXBException e) {
+									log.error("Some error happend in XML file: "+file.getName()+e);
+								}
+
+							} else {
+							log.info("Validation failed for file: "+file.getName());
+							}
+						}
+					} else {
+						log.info("No files found in Folder: "+folderName);
+					}
+				} else if(dir.getName().contains("CANCEL")&& dir.getName().contains("MMS") && dir.getName().contains("SBIN")
+						&& daydir <= 31 && monthdir <= 12 && yeardir.length() == 4) {
+					log.info("Folder found for Pain_09 method: "+folderName);
+					File[] files = dir.listFiles((d, name) -> name.endsWith(".xml"));
+					if (files != null) {
+						for (File file : files) {
+							log.info("Xml File found for process, File name: "+file.getName()+" in Folder: "+folderName);
+							String[] FileName = file.getName().split("-");
+							int date = Integer.parseInt(FileName[4]);
+							int day = date / 1000000;
+							int month = (date % 1000000) / 10000;
+							String year = Integer.toString(date % 10000);
+							//log.info(day + "   " + month + "  " + year);
+
+							if (FileName[0].equals("MMS") && FileName[1].equals("CANCEL")
+									&& FileName[6].equals("INP.xml") && day <= 31 && month <= 12
+									&& year.length() == 4) {
+								log.info("Validation completed for File Name: "+file.getName());
+								XML_READER xmlReader = new XML_READER();
+								try {
+									Pain_11_document data = xmlReader.readXml11(file);
+									if(data!=null && data.getMndtCxlReq()!=null && data.getMndtCxlReq().getGrpHdr()!=null && data.getMndtCxlReq().getUndrlygCxlDtls()!=null) {
+										UpdateTableForCancel update=new UpdateTableForCancel();
+										update.updateTableWithDocument3(data,file.getName(),dir.getName(),destinationFailFolderCancel,destinationSuccessFolderForCancel,dir);
+									} else {
+										log.info("Data or required fields are null.");
+									}
+								} catch (JAXBException e) {
+									log.error("Some error happend in XML file: "+file.getName());
+								}
+							} else {
+								log.info("Validation failed for file: "+file.getName());
+								}
+							}
+						} else {
+							log.info("No files found in Folder: "+folderName);
+						}
+				}
+
+				
+				//|| files[0].equals("Thumbs.db")
+				String[] files = dir.list();
+				if (files == null || files.length == 0 ) {
+					if (dir.delete()) {
+						log.info("Directory deleted successfully: "+folderName);
+					} else {
+						log.info("Failed to delete the directory: "+folderName);
+					}
+				} else {
+					Path sourcepath2 = dir.toPath();
+					String destinationFailFolderPath=null;
+					if(dir.getName().contains("CREATE")) {
+						destinationFailFolderPath=destinationFailFolderPathCreate;
+					} else if(dir.getName().contains("AMEND")) {
+						destinationFailFolderPath=destinationFailFolderPathAmmend;
+					}
+					Path targetPath = Paths.get(destinationFailFolderPath, dir.getName());
+
+					// Move the directory
+					try {
+//						Files.move(sourcePath, targetPath,StandardCopyOption.REPLACE_EXISTING);
+						Files.walk(sourcepath2).forEach(sourcePath -> {
+							Path destinationPath = destinationpath.resolve(sourcepath.relativize(sourcePath));
+							try {
+								if (Files.isDirectory(sourcePath)) {
+									// Create the directory in the target location
+									Files.createDirectories(destinationPath);
+								} else {
+									// Copy the file to the target location
+									Files.copy(sourcePath, destinationPath, StandardCopyOption.REPLACE_EXISTING);
+									
+								}
+								
+							} catch (IOException e) {
+								log.error("Failed to copy " + sourcePath + ": " + e.getMessage()+"for foldername:-"+dir.getName());
+							}
+						});  
+						Files.walkFileTree(sourcepath2, new SimpleFileVisitor<Path>() {
+						    @Override
+						    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+						        Files.delete(file);
+						        return FileVisitResult.CONTINUE;
+						    }
+
+						    @Override
+						    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+						        Files.delete(dir);
+						        return FileVisitResult.CONTINUE;
+						    }
+						});   
+						log.info("Directory: "+folderName+" moved to: " + targetPath);
+					} catch (IOException e) {
+						// TODO Auto-generated catch block
+						log.error("Failed to move file: "+folderName+e);
+					}
+
+				}
+
+			}
+		} else {
+			log.info("No files to process");
+		}
+	}
+
+	
+}
+class Helper extends TimerTask{
+	private static final String sourceFolderPath = ExtractProp.getInstance().getExtractProperty("sourceFolderPath");
+	private static final String destinationFailFolderPathAmmend = ExtractProp.getInstance().getExtractProperty("destinationFailFolderPathAmmend");
+	private static final String destinationFailFolderPathCreate = ExtractProp.getInstance().getExtractProperty("destinationFailFolderPathCreate");
+	private static final String destinationFailFolderPathCancel = ExtractProp.getInstance().getExtractProperty("destinationFailFolderPathCancel");
+	private static final String succesFolderPathforAmmend = ExtractProp.getInstance().getExtractProperty("succesFolderPathforAmmend");
+	private static final String succesFolderPathforCreate = ExtractProp.getInstance().getExtractProperty("succesFolderPathforCreate");
+	private static final String succesFolderPathforCancel = ExtractProp.getInstance().getExtractProperty("succesFolderPathforCancel");
+	private static final Logger log = LogManager.getLogger(Pain_09_10_main.class);
+	@Override
+	public void run() {
+		File sourceFolder = new File(sourceFolderPath);
+		File[] directories = sourceFolder.listFiles(File::isDirectory);
+		if (directories.length == 0) {
+			log.info("No files to process");
+		} else {
+			Pain_09_10_main.processXMLFiles(sourceFolderPath, destinationFailFolderPathAmmend,destinationFailFolderPathCreate, succesFolderPathforAmmend,succesFolderPathforCreate,destinationFailFolderPathCancel,succesFolderPathforCancel);
+		}
+	}
+}
+
+
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+import jakarta.xml.bind.annotation.*;
+
+@XmlRootElement(name = "Document", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+@XmlAccessorType(XmlAccessType.FIELD)
+public class Pain_09_Document {
+	@XmlElement(name = "MndtInitnReq", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private MndtInitnReq mndtInitnReq;
+
+	public MndtInitnReq getMndtInitnReq() {
+		return mndtInitnReq;
+	}
+
+	public void setMndtInitnReq(MndtInitnReq mndtInitnReq) {
+		this.mndtInitnReq = mndtInitnReq;
+	}
+}
+
+//MndtInitnReq class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class MndtInitnReq {
+	@XmlElement(name = "GrpHdr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private GrpHdr_09 grpHdr;
+	@XmlElement(name = "Mndt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Mndt_09 mndt;
+
+	public GrpHdr_09 getGrpHdr() {
+		return grpHdr;
+	}
+
+	public void setGrpHdr(GrpHdr_09 grpHdr) {
+		this.grpHdr = grpHdr;
+	}
+
+	public Mndt_09 getMndt() {
+		return mndt;
+	}
+
+	public void setMndt(Mndt_09 mndt) {
+		this.mndt = mndt;
+	}
+
+}
+
+//GrpHdr class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class GrpHdr_09 {
+	@XmlElement(name = "MsgId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String msgId;
+	@XmlElement(name = "CreDtTm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String creDtTm;
+	@XmlElement(name = "InitgPty", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private InitgPty_09 initgPty;
+	@XmlElement(name = "InstgAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private InstgAgt_09 instgAgt;
+	@XmlElement(name = "InstdAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private InstdAgt_09 instdAgt;
+
+	public String getMsgId() {
+		return msgId;
+	}
+
+	public void setMsgId(String msgId) {
+		this.msgId = msgId;
+	}
+
+	public String getCreDtTm() {
+		return creDtTm;
+	}
+
+	public void setCreDtTm(String creDtTm) {
+		this.creDtTm = creDtTm;
+	}
+
+	public InitgPty_09 getInitgPty() {
+		return initgPty;
+	}
+
+	public void setInitgPty(InitgPty_09 initgPty) {
+		this.initgPty = initgPty;
+	}
+
+	public InstgAgt_09 getInstgAgt() {
+		return instgAgt;
+	}
+
+	public void setInstgAgt(InstgAgt_09 instgAgt) {
+		this.instgAgt = instgAgt;
+	}
+
+	public InstdAgt_09 getInstdAgt() {
+		return instdAgt;
+	}
+
+	public void setInstdAgt(InstdAgt_09 instdAgt) {
+		this.instdAgt = instdAgt;
+	}
+
+}
+
+//InitgPty class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class InitgPty_09 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Id_09 id;
+
+	public Id_09 getId() {
+		return id;
+	}
+
+	public void setId(Id_09 id) {
+		this.id = id;
+	}
+}
+
+//Id class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Id_09 {
+	@XmlElement(name = "OrgId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private OrgId_09 orgId;
+
+	public OrgId_09 getOrgId() {
+		return orgId;
+	}
+
+	public void setOrgId(OrgId_09 orgId) {
+		this.orgId = orgId;
+	}
+}
+
+//OrgId class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class OrgId_09 {
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Othr_09 othr;
+
+	public Othr_09 getOthr() {
+		return othr;
+	}
+
+	public void setOthr(Othr_09 othr) {
+		this.othr = othr;
+	}
+}
+
+//Othr class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Othr_09 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String id;
+
+	public String getId() {
+		return id;
+	}
+
+	public void setId(String id) {
+		this.id = id;
+	}
+}
+
+//InstgAgt class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class InstgAgt_09 {
+	@XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private FinInstnId_09 finInstnId;
+
+	public FinInstnId_09 getFinInstnId() {
+		return finInstnId;
+	}
+
+	public void setFinInstnId(FinInstnId_09 finInstnId) {
+		this.finInstnId = finInstnId;
+	}
+}
+
+//FinInstnId class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class FinInstnId_09 {
+	@XmlElement(name = "ClrSysMmbId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private ClrSysMmbId_09 clrSysMmbId;
+	@XmlElement(name = "Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String nm;
+
+	public ClrSysMmbId_09 getClrSysMmbId() {
+		return clrSysMmbId;
+	}
+
+	public void setClrSysMmbId(ClrSysMmbId_09 clrSysMmbId) {
+		this.clrSysMmbId = clrSysMmbId;
+	}
+
+	public String getNm() {
+		return nm;
+	}
+
+	public void setNm(String nm) {
+		this.nm = nm;
+	}
+
+}
+
+//ClrSysMmbId class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class ClrSysMmbId_09 {
+	@XmlElement(name = "MmbId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String mmbId;
+
+	public String getMmbId() {
+		return mmbId;
+	}
+
+	public void setMmbId(String mmbId) {
+		this.mmbId = mmbId;
+	}
+
+}
+
+//InstdAgt class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class InstdAgt_09 {
+	@XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private FinInstnId_09 finInstnId;
+
+	public FinInstnId_09 getFinInstnId() {
+		return finInstnId;
+	}
+
+	public void setFinInstnId(FinInstnId_09 finInstnId) {
+		this.finInstnId = finInstnId;
+	}
+}
+
+//Mndt class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Mndt_09 {
+	@XmlElement(name = "MndtId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String mndtId;
+	@XmlElement(name = "MndtReqId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String mndtReqId;
+	@XmlElement(name = "Tp", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Tp_09 tp;
+	@XmlElement(name = "Ocrncs", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Ocrncs_09 ocrncs;
+	@XmlElement(name = "MaxAmt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private MaxAmt_09 maxAmt;
+	@XmlElement(name = "ColltnAmt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private ColltnAmt colltnAmt;
+	
+
+	@XmlElement(name = "Cdtr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Cdtr_09 cdtr;
+	@XmlElement(name = "CdtrAcct", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private CdtrAcct_09 cdtrAcct;
+	@XmlElement(name = "CdtrAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private CdtrAgt_09 cdtrAgt;
+	@XmlElement(name = "Dbtr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Dbtr_09 dbtr;
+	@XmlElement(name = "DbtrAcct", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private DbtrAcct_09 dbtrAcct;
+	@XmlElement(name = "DbtrAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private DbtrAgt_09 dbtrAgt;
+
+	public String getMndtId() {
+		return mndtId;
+	}
+
+	public void setMndtId(String mndtId) {
+		this.mndtId = mndtId;
+	}
+
+	public String getMndtReqId() {
+		return mndtReqId;
+	}
+
+	public void setMndtReqId(String mndtReqId) {
+		this.mndtReqId = mndtReqId;
+	}
+
+	public Tp_09 getTp() {
+		return tp;
+	}
+
+	public void setTp(Tp_09 tp) {
+		this.tp = tp;
+	}
+
+	public Ocrncs_09 getOcrncs() {
+		return ocrncs;
+	}
+
+	public void setOcrncs(Ocrncs_09 ocrncs) {
+		this.ocrncs = ocrncs;
+	}
+
+	public MaxAmt_09 getMaxAmt() {
+		return maxAmt;
+	}
+
+	public void setMaxAmt(MaxAmt_09 maxAmt) {
+		this.maxAmt = maxAmt;
+	}
+	public ColltnAmt getColltnAmt() {
+		return colltnAmt;
+	}
+
+	public void setColltnAmt(ColltnAmt colltnAmt) {
+		this.colltnAmt = colltnAmt;
+	}
+	public Cdtr_09 getCdtr() {
+		return cdtr;
+	}
+
+	public void setCdtr(Cdtr_09 cdtr) {
+		this.cdtr = cdtr;
+	}
+
+	public CdtrAcct_09 getCdtrAcct() {
+		return cdtrAcct;
+	}
+
+	public void setCdtrAcct(CdtrAcct_09 cdtrAcct) {
+		this.cdtrAcct = cdtrAcct;
+	}
+
+	public CdtrAgt_09 getCdtrAgt() {
+		return cdtrAgt;
+	}
+
+	public void setCdtrAgt(CdtrAgt_09 cdtrAgt) {
+		this.cdtrAgt = cdtrAgt;
+	}
+
+	public Dbtr_09 getDbtr() {
+		return dbtr;
+	}
+
+	public void setDbtr(Dbtr_09 dbtr) {
+		this.dbtr = dbtr;
+	}
+
+	public DbtrAcct_09 getDbtrAcct() {
+		return dbtrAcct;
+	}
+
+	public void setDbtrAcct(DbtrAcct_09 dbtrAcct) {
+		this.dbtrAcct = dbtrAcct;
+	}
+
+	public DbtrAgt_09 getDbtrAgt() {
+		return dbtrAgt;
+	}
+
+	public void setDbtrAgt(DbtrAgt_09 dbtrAgt) {
+		this.dbtrAgt = dbtrAgt;
+	}
+
+}
+
+//Tp class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Tp_09 {
+	@XmlElement(name = "SvcLvl", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private SvcLvl_09 svcLvl;
+	@XmlElement(name = "LclInstrm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private LclInstrm_09 lclInstrm;
+
+	public SvcLvl_09 getSvcLvl() {
+		return svcLvl;
+	}
+
+	public void setSvcLvl(SvcLvl_09 svcLvl) {
+		this.svcLvl = svcLvl;
+	}
+
+	public LclInstrm_09 getLclInstrm() {
+		return lclInstrm;
+	}
+
+	public void setLclInstrm(LclInstrm_09 lclInstrm) {
+		this.lclInstrm = lclInstrm;
+	}
+
+}
+
+//SvcLvl class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class SvcLvl_09 {
+	@XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String prtry;
+
+	public String getPrtry() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+}
+
+//LclInstrm class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class LclInstrm_09 {
+	@XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String prtry;
+
+	public String getPrtry() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+}
+
+//Ocrncs class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Ocrncs_09 {
+	@XmlElement(name = "SeqTp", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String seqTp;
+	@XmlElement(name = "Frqcy", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String frqcy;
+	@XmlElement(name = "Drtn", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Drtn_09 drtn;
+	@XmlElement(name = "FrstColltnDt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String frstColltnDt;
+	@XmlElement(name = "FnlColltnDt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String fnlColltnDt;
+
+	public String getSeqTp() {
+		return seqTp;
+	}
+
+	public void setSeqTp(String seqTp) {
+		this.seqTp = seqTp;
+	}
+
+	public String getFrqcy() {
+		return frqcy;
+	}
+
+	public void setFrqcy(String frqcy) {
+		this.frqcy = frqcy;
+	}
+
+	public Drtn_09 getDrtn() {
+		return drtn;
+	}
+
+	public void setDrtn(Drtn_09 drtn) {
+		this.drtn = drtn;
+	}
+
+	public String getFrstColltnDt() {
+		return frstColltnDt;
+	}
+
+	public void setFrstColltnDt(String frstColltnDt) {
+		this.frstColltnDt = frstColltnDt;
+	}
+
+	public String getFnlColltnDt() {
+		return fnlColltnDt;
+	}
+
+	public void setFnlColltnDt(String fnlColltnDt) {
+		this.fnlColltnDt = fnlColltnDt;
+	}
+
+}
+
+//Drtn class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Drtn_09 {
+	@XmlElement(name = "FrDt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String frDt;
+
+	public String getFrDt() {
+		return frDt;
+	}
+
+	public void setFrDt(String frDt) {
+		this.frDt = frDt;
+	}
+}
+
+//MaxAmt class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class MaxAmt_09 {
+	@XmlAttribute(name = "Ccy", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String ccy;
+	@XmlValue
+	private String value; // Assuming the value is a string representation of the amount
+
+	public String getCcy() {
+		return ccy;
+	}
+
+	public void setCcy(String ccy) {
+		this.ccy = ccy;
+	}
+
+	public String getValue() {
+		return value;
+	}
+
+	public void setValue(String value) {
+		this.value = value;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class ColltnAmt_09 {
+
+	@XmlAttribute(name = "Ccy", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+	private String ccy;
+
+	@XmlValue
+	private String amount;
+
+	public String getCcy() {
+		return ccy;
+	}
+
+	public void setCcy(String ccy) {
+		this.ccy = ccy;
+	}
+
+	public String getAmount() {
+		return amount;
+	}
+
+	public void setAmount(String amount) {
+		this.amount = amount;
+	}
+
+}
+
+//Cdtr class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Cdtr_09 {
+	@XmlElement(name = "Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String nm;
+
+	public String getNm() {
+		return nm;
+	}
+
+	public void setNm(String nm) {
+		this.nm = nm;
+	}
+}
+
+//CdtrAcct class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class CdtrAcct_09 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Id_09_2 id;
+
+	public Id_09_2 getId() {
+		return id;
+	}
+
+	public void setId(Id_09_2 id) {
+		this.id = id;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Id_09_2 {
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Othr_09 othr;
+
+	public Othr_09 getOthr() {
+		return othr;
+	}
+
+	public void setOthr(Othr_09 othr) {
+		this.othr = othr;
+	}
+}
+
+//CdtrAgt class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class CdtrAgt_09 {
+	@XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private FinInstnId_09 finInstnId;
+
+	public FinInstnId_09 getFinInstnId() {
+		return finInstnId;
+	}
+
+	public void setFinInstnId(FinInstnId_09 finInstnId) {
+		this.finInstnId = finInstnId;
+	}
+}
+
+//Dbtr class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Dbtr_09 {
+	@XmlElement(name = "Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String nm;
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Id_09_3 id;
+	@XmlElement(name = "CtctDtls", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private CtctDtls_09 ctctDtls; // Assuming this is a string
+
+	public String getNm() {
+		return nm;
+	}
+
+	public void setNm(String nm) {
+		this.nm = nm;
+	}
+
+	public Id_09_3 getId() {
+		return id;
+	}
+
+	public void setId(Id_09_3 id) {
+		this.id = id;
+	}
+
+	public CtctDtls_09 getCtctDtls() {
+		return ctctDtls;
+	}
+
+	public void setCtctDtls(CtctDtls_09 ctctDtls) {
+		this.ctctDtls = ctctDtls;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class CtctDtls_09 {
+	@XmlElement(name = "PhneNb", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String PhneNb;
+
+	@XmlElement(name = "MobNb", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String MobNb;
+	@XmlElement(name = "EmailAdr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String EmailAdr;
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String Othr;
+
+	public String getPhneNb() {
+		return PhneNb;
+	}
+
+	public void setPhneNb(String phneNb) {
+		PhneNb = phneNb;
+	}
+
+	public String getMobNb() {
+		return MobNb;
+	}
+
+	public void setMobNb(String mobNb) {
+		MobNb = mobNb;
+	}
+
+	public String getEmailAdr() {
+		return EmailAdr;
+	}
+
+	public void setEmailAdr(String emailAdr) {
+		EmailAdr = emailAdr;
+	}
+
+	public String getOthr() {
+		return Othr;
+	}
+
+	public void setOthr(String othr) {
+		Othr = othr;
+	}
+
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Id_09_3 {
+	@XmlElement(name = "PrvtId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private PrvtId_09 prvtid;
+
+	public PrvtId_09 getPrvtid() {
+		return prvtid;
+	}
+
+	public void setPrvtid(PrvtId_09 prvtid) {
+		this.prvtid = prvtid;
+	}
+
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class PrvtId_09 {
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Othr_09_3 othr3;
+
+	public Othr_09_3 getOthr3() {
+		return othr3;
+	}
+
+	public void setOthr3(Othr_09_3 othr3) {
+		this.othr3 = othr3;
+	}
+
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Othr_09_3 {
+
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String Id;
+
+	@XmlElement(name = "SchmeNm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private SchmeNm_09 schemenm;
+
+	public String getId() {
+		return Id;
+	}
+
+	public void setId(String id) {
+		Id = id;
+	}
+
+	public SchmeNm_09 getSchemenm() {
+		return schemenm;
+	}
+
+	public void setSchemenm(SchmeNm_09 schemenm) {
+		this.schemenm = schemenm;
+	}
+
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class SchmeNm_09 {
+	@XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String prtry;
+
+	public String getPrtry() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+
+}
+
+//DbtrAcct class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class DbtrAcct_09 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Id_09_2 id;
+	@XmlElement(name = "Tp", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private Tp_09_2 tp;
+
+	public Id_09_2 getId() {
+		return id;
+	}
+
+	public void setId(Id_09_2 id) {
+		this.id = id;
+	}
+
+	public Tp_09_2 getTp() {
+		return tp;
+	}
+
+	public void setTp(Tp_09_2 tp) {
+		this.tp = tp;
+	}
+
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Tp_09_2 {
+	@XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private String prtry;
+
+	public String getPrtry() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+
+}
+//DbtrAgt class
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class DbtrAgt_09 {
+	@XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.009.001.01")
+	private FinInstnId_09 finInstnId;
+
+	public FinInstnId_09 getFinInstnId() {
+		return finInstnId;
+	}
+
+	public void setFinInstnId(FinInstnId_09 finInstnId) {
+		this.finInstnId = finInstnId;
+	}
+}
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+
+import jakarta.xml.bind.annotation.*;
+
+
+@XmlRootElement(name = "Document", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+@XmlAccessorType(XmlAccessType.FIELD)
+class Pain_10_Document {
+
+    @XmlElement(name = "MndtAmdmntReq", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private MndtAmdmntReq mndtAmdmntReq;
+
+	public MndtAmdmntReq getMndtAmdmntReq() {
+		return mndtAmdmntReq;
+	}
+
+	public void setMndtAmdmntReq(MndtAmdmntReq mndtAmdmntReq) {
+		this.mndtAmdmntReq = mndtAmdmntReq;
+	}
+
+    
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class MndtAmdmntReq {
+
+    @XmlElement(name = "GrpHdr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private GrpHdr grpHdr;
+
+    @XmlElement(name = "UndrlygAmdmntDtls", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private UndrlygAmdmntDtls undrlygAmdmntDtls;
+
+	public GrpHdr getGrpHdr() {
+		return grpHdr;
+	}
+
+	public void setGrpHdr(GrpHdr grpHdr) {
+		this.grpHdr = grpHdr;
+	}
+
+	public UndrlygAmdmntDtls getUndrlygAmdmntDtls() {
+		return undrlygAmdmntDtls;
+	}
+
+	public void setUndrlygAmdmntDtls(UndrlygAmdmntDtls undrlygAmdmntDtls) {
+		this.undrlygAmdmntDtls = undrlygAmdmntDtls;
+	}
+
+  
+    
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class InitgPty {
+	@XmlElement(name = "OrgId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private OrgId Orgid;
+
+	public OrgId getOrgid() {
+		return Orgid;
+	}
+
+	public void setOrgid(OrgId orgid) {
+		Orgid = orgid;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class OrgId {
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Othr2 othr;
+
+	public Othr2 getOthr() {
+		return othr;
+	}
+
+	public void setOthr(Othr2 othr) {
+		this.othr = othr;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Othr2 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String id;
+
+	public String getId() {
+		return id;
+	}
+
+	public void setId(String id) {
+		this.id = id;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class GrpHdr {
+
+    @XmlElement(name = "MsgId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String msgId;
+
+    @XmlElement(name = "CreDtTm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String creDtTm;
+    
+    @XmlElement(name = "InitgPty", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private InitgPty Initgpty;
+
+    @XmlElement(name = "InstgAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Agent instgAgt;
+
+    @XmlElement(name = "InstdAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Agent instdAgt;
+
+	public InitgPty getInitgpty() {
+		return Initgpty;
+	}
+
+	public void setInitgpty(InitgPty initgpty) {
+		Initgpty = initgpty;
+	}
+
+	public String getMsgId() {
+		return msgId;
+	}
+
+	public void setMsgId(String msgId) {
+		this.msgId = msgId;
+	}
+
+	public String getCreDtTm() {
+		return creDtTm;
+	}
+
+	public void setCreDtTm(String creDtTm) {
+		this.creDtTm = creDtTm;
+	}
+
+	public Agent getInstgAgt() {
+		return instgAgt;
+	}
+
+	public void setInstgAgt(Agent instgAgt) {
+		this.instgAgt = instgAgt;
+	}
+
+	public Agent getInstdAgt() {
+		return instdAgt;
+	}
+
+	public void setInstdAgt(Agent instdAgt) {
+		this.instdAgt = instdAgt;
+	}
+
+    
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Agent {
+
+    @XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private FinInstnId finInstnId;
+
+	public FinInstnId getFinInstnId() {
+		return finInstnId;
+	}
+
+	public void setFinInstnId(FinInstnId finInstnId) {
+		this.finInstnId = finInstnId;
+	}
+
+    
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class FinInstnId {
+
+    @XmlElement(name = "ClrSysMmbId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private ClrSysMmbId clrSysMmbId;
+
+    @XmlElement(name = "Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String name;
+
+	public ClrSysMmbId getClrSysMmbId() {
+		return clrSysMmbId;
+	}
+
+	public void setClrSysMmbId(ClrSysMmbId clrSysMmbId) {
+		this.clrSysMmbId = clrSysMmbId;
+	}
+
+	public String getName() {
+		return name;
+	}
+
+	public void setName(String name) {
+		this.name = name;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class ClrSysMmbId {
+
+    @XmlElement(name = "MmbId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String mmbId;
+
+	public String getMmbId() {
+		return mmbId;
+	}
+
+	public void setMmbId(String mmbId) {
+		this.mmbId = mmbId;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class UndrlygAmdmntDtls {
+
+    @XmlElement(name = "AmdmntRsn", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private AmdmntRsn amdmntRsn;
+
+    @XmlElement(name = "Mndt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Mndt mndt;
+    
+    @XmlElement(name = "OrgnlMndt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private OrgnlMndt orgnlMndt;
+
+	public OrgnlMndt getOrgnlMndt() {
+		return orgnlMndt;
+	}
+
+	public void setOrgnlMndt(OrgnlMndt orgnlMndt) {
+		this.orgnlMndt = orgnlMndt;
+	}
+
+	public AmdmntRsn getAmdmntRsn() {
+		return amdmntRsn;
+	}
+
+	public void setAmdmntRsn(AmdmntRsn amdmntRsn) {
+		this.amdmntRsn = amdmntRsn;
+	}
+
+	public Mndt getMndt() {
+		return mndt;
+	}
+
+	public void setMndt(Mndt mndt) {
+		this.mndt = mndt;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class AmdmntRsn {
+
+    @XmlElement(name = "Rsn", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Rsn rsn;
+
+	public Rsn getRsn() {
+		return rsn;
+	}
+
+	public void setRsn(Rsn rsn) {
+		this.rsn = rsn;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Rsn {
+
+    @XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String prtry;
+
+	public String getPrtry() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Mndt {
+
+    @XmlElement(name = "MndtId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String mndtId;
+
+    @XmlElement(name = "MndtReqId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String mndtReqId;
+
+    @XmlElement(name = "Tp", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Tp tp;
+
+    @XmlElement(name = "Ocrncs", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Ocrncs ocrncs;
+
+    @XmlElement(name = "ColltnAmt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private ColltnAmt colltnAmt;
+    
+    @XmlElement(name = "MaxAmt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private MaxnAmt maxamt;
+
+    @XmlElement(name = "Cdtr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Cdtr cdtr;
+
+    @XmlElement(name = "CdtrAcct", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private CdtrAcct cdtrAcct;
+
+    @XmlElement(name = "CdtrAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Agent cdtrAgt;
+
+    @XmlElement(name = "Dbtr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Dbtr dbtr;
+
+    @XmlElement(name = "DbtrAcct", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private DbtrAcct dbtrAcct;
+
+    @XmlElement(name = "DbtrAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Agent dbtrAgt;
+
+    
+
+	public MaxnAmt getMaxamt() {
+		return maxamt;
+	}
+
+	public void setMaxamt(MaxnAmt maxamt) {
+		this.maxamt = maxamt;
+	}
+
+	public String getMndtId() {
+		return mndtId;
+	}
+
+	public void setMndtId(String mndtId) {
+		this.mndtId = mndtId;
+	}
+
+	public String getMndtReqId() {
+		return mndtReqId;
+	}
+
+	public void setMndtReqId(String mndtReqId) {
+		this.mndtReqId = mndtReqId;
+	}
+
+	public Tp getTp() {
+		return tp;
+	}
+
+	public void setTp(Tp tp) {
+		this.tp = tp;
+	}
+
+	public Ocrncs getOcrncs() {
+		return ocrncs;
+	}
+
+	public void setOcrncs(Ocrncs ocrncs) {
+		this.ocrncs = ocrncs;
+	}
+
+	public ColltnAmt getColltnAmt() {
+		return colltnAmt;
+	}
+
+	public void setColltnAmt(ColltnAmt colltnAmt) {
+		this.colltnAmt = colltnAmt;
+	}
+
+	public Cdtr getCdtr() {
+		return cdtr;
+	}
+
+	public void setCdtr(Cdtr cdtr) {
+		this.cdtr = cdtr;
+	}
+
+	public CdtrAcct getCdtrAcct() {
+		return cdtrAcct;
+	}
+
+	public void setCdtrAcct(CdtrAcct cdtrAcct) {
+		this.cdtrAcct = cdtrAcct;
+	}
+
+	public Agent getCdtrAgt() {
+		return cdtrAgt;
+	}
+
+	public void setCdtrAgt(Agent cdtrAgt) {
+		this.cdtrAgt = cdtrAgt;
+	}
+
+	public Dbtr getDbtr() {
+		return dbtr;
+	}
+
+	public void setDbtr(Dbtr dbtr) {
+		this.dbtr = dbtr;
+	}
+
+	public DbtrAcct getDbtrAcct() {
+		return dbtrAcct;
+	}
+
+	public void setDbtrAcct(DbtrAcct dbtrAcct) {
+		this.dbtrAcct = dbtrAcct;
+	}
+
+	public Agent getDbtrAgt() {
+		return dbtrAgt;
+	}
+
+	public void setDbtrAgt(Agent dbtrAgt) {
+		this.dbtrAgt = dbtrAgt;
+	}
+
+	
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Tp {
+
+    @XmlElement(name = "SvcLvl", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private SvcLvl svcLvl;
+
+    @XmlElement(name = "LclInstrm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private LclInstrm lclInstrm;
+
+	public SvcLvl getSvcLvl() {
+		return svcLvl;
+	}
+
+	public void setSvcLvl(SvcLvl svcLvl) {
+		this.svcLvl = svcLvl;
+	}
+
+	public LclInstrm getLclInstrm() {
+		return lclInstrm;
+	}
+
+	public void setLclInstrm(LclInstrm lclInstrm) {
+		this.lclInstrm = lclInstrm;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class SvcLvl {
+
+    @XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String prtry;
+
+	public String getPrtry5() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class LclInstrm {
+
+    @XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String prtry;
+
+	public String getPrtry3() {
+		return prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		this.prtry = prtry;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Ocrncs {
+
+    @XmlElement(name = "SeqTp", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String seqTp;
+
+    @XmlElement(name = "Frqcy", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String frqcy;
+
+    @XmlElement(name = "Drtn", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Drtn drtn;
+
+    @XmlElement(name = "FrstColltnDt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String frstColltnDt;
+
+    @XmlElement(name = "FnlColltnDt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String fnlColltnDt;
+
+	public String getSeqTp() {
+		return seqTp;
+	}
+
+	public void setSeqTp(String seqTp) {
+		this.seqTp = seqTp;
+	}
+
+	public String getFrqcy() {
+		return frqcy;
+	}
+
+	public void setFrqcy(String frqcy) {
+		this.frqcy = frqcy;
+	}
+
+	public Drtn getDrtn() {
+		return drtn;
+	}
+
+	public void setDrtn(Drtn drtn) {
+		this.drtn = drtn;
+	}
+
+	public String getFrstColltnDt() {
+		return frstColltnDt;
+	}
+
+	public void setFrstColltnDt(String frstColltnDt) {
+		this.frstColltnDt = frstColltnDt;
+	}
+
+	public String getFnlColltnDt() {
+		return fnlColltnDt;
+	}
+
+	public void setFnlColltnDt(String fnlColltnDt) {
+		this.fnlColltnDt = fnlColltnDt;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Drtn {
+
+    @XmlElement(name = "FrDt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String frDt;
+
+	public String getFrDt() {
+		return frDt;
+	}
+
+	public void setFrDt(String frDt) {
+		this.frDt = frDt;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class ColltnAmt {
+
+    @XmlAttribute(name = "Ccy", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String ccy;
+
+    @XmlValue
+    private String amount;
+
+	public String getCcy() {
+		return ccy;
+	}
+
+	public void setCcy(String ccy) {
+		this.ccy = ccy;
+	}
+
+	public String getAmount() {
+		return amount;
+	}
+
+	public void setAmount(String amount) {
+		this.amount = amount;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class MaxnAmt {
+
+    @XmlAttribute(name = "Ccy", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String ccy;
+
+    @XmlValue
+    private String amount;
+
+	public String getCcy() {
+		return ccy;
+	}
+
+	public void setCcy(String ccy) {
+		this.ccy = ccy;
+	}
+
+	public String getAmount() {
+		return amount;
+	}
+
+	public void setAmount(String amount) {
+		this.amount = amount;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Cdtr {
+
+    @XmlElement(name = "Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String name;
+
+	public String getName() {
+		return name;
+	}
+
+	public void setName(String name) {
+		this.name = name;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class CdtrAcct {
+
+    @XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Id id;
+
+	public Id getId() {
+		return id;
+	}
+
+	public void setId(Id id) {
+		this.id = id;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Id {
+
+    @XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Othr othr;
+
+	public Othr getOthr() {
+		return othr;
+	}
+
+	public void setOthr(Othr othr) {
+		this.othr = othr;
+	}
+
+    
+}
+
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Id2{
+	@XmlElement(name = "PrvtId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private PrvtId prvtid;
+
+	public PrvtId getPrvtid() {
+		return prvtid;
+	}
+
+	public void setPrvtid(PrvtId prvtid) {
+		this.prvtid = prvtid;
+	}
+	
+	
+}
+
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class PrvtId{
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Othr othr;
+
+	public Othr getOthr() {
+		return othr;
+	}
+
+	public void setOthr(Othr othr) {
+		this.othr = othr;
+	}
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class SchmeNm{
+	@XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String Prtry;
+
+	public String getPrtry() {
+		return Prtry;
+	}
+
+	public void setPrtry(String prtry) {
+		Prtry = prtry;
+	}
+	
+	
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Othr {
+
+    @XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String id;
+    
+    @XmlElement(name = "SchmeNm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private SchmeNm Schmenm;
+
+	public String getId() {
+		return id;
+	}
+
+	public void setId(String id) {
+		this.id = id;
+	}
+
+	public SchmeNm getSchmenm() {
+		return Schmenm;
+	}
+
+	public void setSchmenm(SchmeNm schmenm) {
+		Schmenm = schmenm;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class CtctDtls{
+	@XmlElement(name = "PhneNb", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String PhneNb;
+	
+	@XmlElement(name = "MobNb", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String MobNb;
+	@XmlElement(name = "EmailAdr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String EmailAdr;
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String Othr;
+	public String getPhneNb() {
+		return PhneNb;
+	}
+	public void setPhneNb(String phneNb) {
+		PhneNb = phneNb;
+	}
+	public String getMobNb() {
+		return MobNb;
+	}
+	public void setMobNb(String mobNb) {
+		MobNb = mobNb;
+	}
+	public String getEmailAdr() {
+		return EmailAdr;
+	}
+	public void setEmailAdr(String emailAdr) {
+		EmailAdr = emailAdr;
+	}
+	public String getOthr() {
+		return Othr;
+	}
+	public void setOthr(String othr) {
+		Othr = othr;
+	}
+	
+	
+	
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Dbtr {
+
+    @XmlElement(name = "Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String name;
+
+    @XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Id2 dbtrId;
+
+    @XmlElement(name = "CtctDtls", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private CtctDtls ctctDtls; // Assuming this is a string for simplicity
+
+	public String getName() {
+		return name;
+	}
+
+	public void setName(String name) {
+		this.name = name;
+	}
+
+	public Id2 getDbtrId() {
+		return dbtrId;
+	}
+
+	public void setDbtrId(Id2 dbtrId) {
+		this.dbtrId = dbtrId;
+	}
+
+	public CtctDtls getCtctDtls() {
+		return ctctDtls;
+	}
+
+	public void setCtctDtls(CtctDtls ctctDtls) {
+		this.ctctDtls = ctctDtls;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class DbtrAcct {
+
+    @XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Id id;
+
+    @XmlElement(name = "Tp", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private Tp2 dbtrTp;
+
+	public Id getId() {
+		return id;
+	}
+
+	public void setId(Id id) {
+		this.id = id;
+	}
+
+	public Tp2 getDbtrTp() {
+		return dbtrTp;
+	}
+
+	public void setDbtrTp(Tp2 dbtrTp) {
+		this.dbtrTp = dbtrTp;
+	}
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Tp2 {
+
+    @XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String Prtry2;
+
+	public String getPrtry2() {
+		return Prtry2;
+	}
+
+	public void setPrtry2(String prtry) {
+		Prtry2 = prtry;
+	}
+
+
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class OrgnlMndt {
+
+    @XmlElement(name = "OrgnlMndtId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.010.001.01")
+    private String orgnlMndtId;
+
+	public String getOrgnlMndtId() {
+		return orgnlMndtId;
+	}
+
+	public void setOrgnlMndtId(String orgnlMndtId) {
+		this.orgnlMndtId = orgnlMndtId;
+	}
+
+    
+}
+
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+import jakarta.xml.bind.annotation.XmlAccessType;
+import jakarta.xml.bind.annotation.XmlAccessorType;
+import jakarta.xml.bind.annotation.XmlElement;
+import jakarta.xml.bind.annotation.XmlRootElement;
+
+@XmlRootElement(name = "Document", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+@XmlAccessorType(XmlAccessType.FIELD)
+public class Pain_11_document {
+	@XmlElement(name = "MndtCxlReq", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private MndtCxlReq mndtCxlReq;
+
+    
+    public MndtCxlReq getMndtCxlReq() {
+        return mndtCxlReq;
+    }
+
+    public void setMndtCxlReq(MndtCxlReq mndtCxlReq) {
+        this.mndtCxlReq = mndtCxlReq;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class MndtCxlReq {
+	@XmlElement(name = "GrpHdr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private GrpHdr_11 grpHdr;
+	@XmlElement(name = "UndrlygCxlDtls", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private UndrlygCxlDtls undrlygCxlDtls;
+
+    
+    public GrpHdr_11 getGrpHdr() {
+        return grpHdr;
+    }
+
+    public void setGrpHdr(GrpHdr_11 grpHdr) {
+        this.grpHdr = grpHdr;
+    }
+
+    
+    public UndrlygCxlDtls getUndrlygCxlDtls() {
+        return undrlygCxlDtls;
+    }
+
+    public void setUndrlygCxlDtls(UndrlygCxlDtls undrlygCxlDtls) {
+        this.undrlygCxlDtls = undrlygCxlDtls;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class GrpHdr_11 {
+	@XmlElement(name = "MsgId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private String msgId;
+	@XmlElement(name = "CreDtTm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private String creDtTm;
+	@XmlElement(name = "InitgPty", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+	private Initgpty_11 initgpty;
+	@XmlElement(name = "InstgAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private InstgAgt instgAgt;
+	@XmlElement(name = "InstdAgt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private InstdAgt instdAgt;
+
+    
+    public String getMsgId() {
+        return msgId;
+    }
+
+    public void setMsgId(String msgId) {
+        this.msgId = msgId;
+    }
+
+    
+    public String getCreDtTm() {
+        return creDtTm;
+    }
+
+    public void setCreDtTm(String creDtTm) {
+        this.creDtTm = creDtTm;
+    }
+
+    
+    public InstgAgt getInstgAgt() {
+        return instgAgt;
+    }
+
+    public void setInstgAgt(InstgAgt instgAgt) {
+        this.instgAgt = instgAgt;
+    }
+
+    
+    public InstdAgt getInstdAgt() {
+        return instdAgt;
+    }
+
+    public void setInstdAgt(InstdAgt instdAgt) {
+        this.instdAgt = instdAgt;
+    }
+
+	public Initgpty_11 getInitgpty() {
+		return initgpty;
+	}
+
+	public void setInitgpty(Initgpty_11 initgpty) {
+		this.initgpty = initgpty;
+	}
+    
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Initgpty_11 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private Id_11 id;
+
+	public Id_11 getId() {
+		return id;
+	}
+
+	public void setId(Id_11 id) {
+		this.id = id;
+	}
+	
+	
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Id_11 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private Orgid_11 orgid;
+
+	public Orgid_11 getOrgid() {
+		return orgid;
+	}
+
+	public void setOrgid(Orgid_11 orgid) {
+		this.orgid = orgid;
+	}
+	
+	
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Orgid_11 {
+	@XmlElement(name = "Othr", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private Othr_11 othr;
+
+	public Othr_11 getOthr() {
+		return othr;
+	}
+
+	public void setOthr(Othr_11 othr) {
+		this.othr = othr;
+	}
+	
+	
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Othr_11 {
+	@XmlElement(name = "Id", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private String id;
+
+	public String getId() {
+		return id;
+	}
+
+	public void setId(String id) {
+		this.id = id;
+	}
+
+	
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class InstgAgt {
+	@XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private FinInstnId_11 finInstnId;
+
+    
+    public FinInstnId_11 getFinInstnId() {
+        return finInstnId;
+    }
+
+    public void setFinInstnId(FinInstnId_11 finInstnId) {
+        this.finInstnId = finInstnId;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class InstdAgt {
+	@XmlElement(name = "FinInstnId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private FinInstnId_11 finInstnId;
+
+    
+    public FinInstnId_11 getFinInstnId() {
+        return finInstnId;
+    }
+
+    public void setFinInstnId(FinInstnId_11 finInstnId) {
+        this.finInstnId = finInstnId;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class FinInstnId_11 {
+	@XmlElement(name = "ClrSysMmbId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private ClrSysMmbId_11 clrSysMmbId;
+	
+	@XmlElement(name="Nm", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+	private String name;
+    
+    public ClrSysMmbId_11 getClrSysMmbId() {
+        return clrSysMmbId;
+    }
+
+    public void setClrSysMmbId(ClrSysMmbId_11 clrSysMmbId) {
+        this.clrSysMmbId = clrSysMmbId;
+    }
+
+	public String getName() {
+		return name;
+	}
+
+	public void setName(String name) {
+		this.name = name;
+	}
+    
+    
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class ClrSysMmbId_11 {
+	@XmlElement(name = "MmbId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private String mmbId;
+
+    
+    public String getMmbId() {
+        return mmbId;
+    }
+
+    public void setMmbId(String mmbId) {
+        this.mmbId = mmbId;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class UndrlygCxlDtls {
+	@XmlElement(name = "CxlRsn", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private CxlRsn cxlRsn;
+	@XmlElement(name = "OrgnlMndt", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private OrgnlMndt_11 orgnlMndt;
+
+    
+    public CxlRsn getCxlRsn() {
+        return cxlRsn;
+    }
+
+    public void setCxlRsn(CxlRsn cxlRsn) {
+        this.cxlRsn = cxlRsn;
+    }
+
+    
+    public OrgnlMndt_11 getOrgnlMndt() {
+        return orgnlMndt;
+    }
+
+    public void setOrgnlMndt(OrgnlMndt_11 orgnlMndt) {
+        this.orgnlMndt = orgnlMndt;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class CxlRsn {
+	@XmlElement(name = "Rsn", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private Rsn_11 rsn;
+
+    
+    public Rsn_11 getRsn() {
+        return rsn;
+    }
+
+    public void setRsn(Rsn_11 rsn) {
+        this.rsn = rsn;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class Rsn_11 {
+	@XmlElement(name = "Prtry", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private String prtry;
+
+    
+    public String getPrtry() {
+        return prtry;
+    }
+
+    public void setPrtry(String prtry) {
+        this.prtry = prtry;
+    }
+}
+
+@XmlAccessorType(XmlAccessType.FIELD)
+class OrgnlMndt_11 {
+	@XmlElement(name = "OrgnlMndtId", namespace = "urn:iso:std:iso:20022:tech:xsd:pain.011.001.01")
+    private String orgnlMndtId;
+
+    
+    public String getOrgnlMndtId() {
+        return orgnlMndtId;
+    }
+
+    public void setOrgnlMndtId(String orgnlMndtId) {
+        this.orgnlMndtId = orgnlMndtId;
+    }
+}
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+import java.io.File;
+import java.io.UnsupportedEncodingException;
+import java.sql.Connection;
+import java.sql.Date;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import com.sbi.tcs.pain10Util.ExtractProp;
+import com.sbi.tcs.pain10Util.Pain10_sequence;
+import com.sbi.tcs.pain10Util.Utility;
+import com.tcs.bancs.microservices.util.CalculateCheckDigit;
+
+public class UpdateTableForAmend {
+	private static final Logger log = LogManager.getLogger(Pain_09_10_main.class);
+	private static String DB_URL = ExtractProp.getInstance().getExtractProperty("DB_URL");
+	private static String USER = ExtractProp.getInstance().getExtractProperty("USER");
+	private static String PASS = ExtractProp.getInstance().getExtractProperty("PASS");
+	private static final String Key = ExtractProp.getInstance().getExtractProperty("Key");
+	private static final String IV = ExtractProp.getInstance().getExtractProperty("IV");
+	private static final String insertAchtSQL = ExtractProp.getInstance().getExtractProperty("insertAchtSQL");
+	private static final String checkACMMEntry = ExtractProp.getInstance().getExtractProperty("checkACMMEntry");
+	private static final String fetchRejectionQuery = ExtractProp.getInstance()
+			.getExtractProperty("fetchRejectionQuery");
+	private static final String tellerId = ExtractProp.getInstance().getExtractProperty("tellerId");
+	static {
+		try {
+			DB_URL = Utility.aesDecrypt(Key, IV, DB_URL);
+			USER = Utility.aesDecrypt(Key, IV, USER);
+			PASS = Utility.aesDecrypt(Key, IV, PASS);
+		} catch (UnsupportedEncodingException ue) {
+			log.info("Error when getting value from property file ", ue);
+		}
+	}
+
+	public static void updateTableWithDocument(Pain_10_Document data, String fileName, String folderName,
+			String immagename1, String immagename2, File destinationFailFolder, File destinationSuccessFolder,
+			File dir) {
+
+		log.info("data goes for extarcted and put in data base for file: " + fileName + "in folder: " + folderName);
+
+		String msg = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getGrpHdr() != null) {
+			msg = data.getMndtAmdmntReq().getGrpHdr().getMsgId();
+		}
+
+		String cred = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getGrpHdr() != null) {
+			cred = data.getMndtAmdmntReq().getGrpHdr().getCreDtTm();
+		}
+
+		String mmbid = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getGrpHdr() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstgAgt() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstgAgt().getFinInstnId() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstgAgt().getFinInstnId().getClrSysMmbId() != null) {
+			mmbid = data.getMndtAmdmntReq().getGrpHdr().getInstgAgt().getFinInstnId().getClrSysMmbId().getMmbId();
+		}
+
+		String name = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getGrpHdr() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstgAgt() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstgAgt().getFinInstnId() != null) {
+			name = data.getMndtAmdmntReq().getGrpHdr().getInstgAgt().getFinInstnId().getName();
+		}
+
+		String mmbid2 = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getGrpHdr() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstdAgt() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstdAgt().getFinInstnId() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInstdAgt().getFinInstnId().getClrSysMmbId() != null) {
+			mmbid2 = data.getMndtAmdmntReq().getGrpHdr().getInstdAgt().getFinInstnId().getClrSysMmbId().getMmbId();
+		}
+
+		String AMND_REASON = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getAmdmntRsn() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getAmdmntRsn().getRsn() != null) {
+			AMND_REASON = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getAmdmntRsn().getRsn().getPrtry();
+		}
+
+		String ACH_UMRN = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null) {
+			ACH_UMRN = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getMndtId();
+		}
+
+		String SPNS_UNIQ_REFNO = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null) {
+			SPNS_UNIQ_REFNO = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getMndtReqId();
+		}
+		String CATE_CODE = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getTp() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getTp().getSvcLvl() != null) {
+			CATE_CODE = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getTp().getSvcLvl().getPrtry5();
+		}
+
+		String PROPRIETARY = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getTp() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getTp().getLclInstrm() != null) {
+			PROPRIETARY = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getTp().getLclInstrm().getPrtry3();
+		}
+
+		String FREQUENCY1 = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs() != null) {
+			FREQUENCY1 = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs().getSeqTp();
+		}
+
+		String FREQUENCY2 = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs() != null) {
+			FREQUENCY2 = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs().getFrqcy();
+		}
+
+		String frdt = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs().getDrtn() != null) {
+			frdt = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs().getDrtn().getFrDt();
+		}
+
+		String frstcoldt = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs() != null) {
+			frstcoldt = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs().getFrstColltnDt();
+		}
+
+		String fnscoldt = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs() != null) {
+			fnscoldt = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getOcrncs().getFnlColltnDt();
+		}
+		Double AMT_IN_FIGURES = 0.0;
+		String col_amount = null;
+		String max_amount = null;
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getColltnAmt() != null) {
+			col_amount = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getColltnAmt().getAmount();
+
+		} else if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getMaxamt() != null) {
+			max_amount = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getMaxamt().getAmount();
+
+		}
+
+		String CCy = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getColltnAmt() != null) {
+			CCy = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getColltnAmt().getCcy();
+		}
+
+		String SERVICE_PROVIDER = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtr() != null) {
+			SERVICE_PROVIDER = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtr().getName();
+		}
+
+		String UTILITY_CODE = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAcct() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAcct().getId() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAcct().getId().getOthr() != null) {
+			UTILITY_CODE = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAcct().getId().getOthr()
+					.getId();
+		}
+
+		String Mmbid3 = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt().getFinInstnId() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt().getFinInstnId()
+						.getClrSysMmbId() != null) {
+			Mmbid3 = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt().getFinInstnId()
+					.getClrSysMmbId().getMmbId();
+		}
+
+		String name4 = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt().getFinInstnId() != null) {
+			name4 = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getCdtrAgt().getFinInstnId().getName();
+		}
+
+		String CUST_NAME = " ";
+		if (data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null) {
+			CUST_NAME = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getName();
+		}
+		String CONSUMER_REF_NO = " ";
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid()
+						.getOthr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid().getOthr()
+						.getId() != null) {
+
+			CONSUMER_REF_NO = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid()
+					.getOthr().getId();
+		}
+		String ACCT_NO = " ";
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct().getId() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct().getId().getOthr() != null) {
+
+			ACCT_NO = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct().getId().getOthr().getId();
+		}
+		String ACCT_TYPE = " ";
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct().getDbtrTp() != null) {
+
+			ACCT_TYPE = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAcct().getDbtrTp().getPrtry2();
+		}
+
+		String Mmbid4 = " ";
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAgt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAgt().getFinInstnId() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAgt().getFinInstnId()
+						.getClrSysMmbId() != null) {
+
+			Mmbid4 = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtrAgt().getFinInstnId()
+					.getClrSysMmbId().getMmbId();
+		}
+
+		String original = " ";
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getOrgnlMndt() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getOrgnlMndt().getOrgnlMndtId()!=null) {
+
+			original = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getOrgnlMndt().getOrgnlMndtId();
+		}
+
+		String CUSTOMER_ADD_ID = " ";
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls().getOthr() != null) {
+			CUSTOMER_ADD_ID = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls()
+					.getOthr();
+		}
+
+		String LANDLINE_NO = " ";
+		String MOBILE_NO = " ";
+		String EMAIL_ID = " ";
+
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls()
+						.getEmailAdr() != null) {
+
+			EMAIL_ID = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls().getEmailAdr();
+		}
+
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls()
+						.getMobNb() != null) {
+
+			MOBILE_NO = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls().getMobNb();
+		}
+
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls()
+						.getPhneNb() != null) {
+
+			LANDLINE_NO = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getCtctDtls().getPhneNb();
+		}
+
+		String SCHEME_REF_NO = " ";
+
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getUndrlygAmdmntDtls() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid()
+						.getOthr() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid().getOthr()
+						.getSchmenm() != null
+				&& data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid().getOthr()
+						.getSchmenm().getPrtry() != null) {
+
+			SCHEME_REF_NO = data.getMndtAmdmntReq().getUndrlygAmdmntDtls().getMndt().getDbtr().getDbtrId().getPrvtid()
+					.getOthr().getSchmenm().getPrtry();
+		}
+
+		String DCA_IDENTIFIER = " ";
+
+		if (data != null && data.getMndtAmdmntReq() != null && data.getMndtAmdmntReq().getGrpHdr() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInitgpty() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInitgpty().getOrgid() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInitgpty().getOrgid().getOthr() != null
+				&& data.getMndtAmdmntReq().getGrpHdr().getInitgpty().getOrgid().getOthr().getId()!=null) {
+
+			DCA_IDENTIFIER = data.getMndtAmdmntReq().getGrpHdr().getInitgpty().getOrgid().getOthr().getId();
+		}
+
+		String[] fileNameParts = fileName.split("-");
+		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMddyyyy");
+		LocalDate localDate = LocalDate.now();
+		Date MANDATE_REC_DATE = Date.valueOf(localDate);
+		String ACH_SERL_NO = fileNameParts[5];
+		String SPNS_BANK_ID = fileNameParts[2];
+		String SPNS_LOGN_ID = fileNameParts[3];
+		String VALIDITY_PERIOD = null;
+		if (!fnscoldt.isEmpty()) {
+			VALIDITY_PERIOD = "F";
+		} else {
+			VALIDITY_PERIOD = "U";
+		}
+
+		int dateAsInt = 0;
+		if (!frstcoldt.equals(" ")) {
+			String[] date = frstcoldt.split("-");
+			String year = date[0];
+			String month = date[1];
+			String day = date[2];
+			dateAsInt = Integer.parseInt(year) * 10000 + Integer.parseInt(month) * 100 + Integer.parseInt(day);
+		}
+		java.sql.Date FROM_DATE = java.sql.Date.valueOf(frstcoldt);
+		int dateAsInt2 = 0;
+		if (!fnscoldt.equals(" ")) {
+			String[] TO_DATE = fnscoldt.split("-");
+			String year2 = TO_DATE[0];
+			String month2 = TO_DATE[1];
+			String day2 = TO_DATE[2];
+			dateAsInt2 = Integer.parseInt(year2) * 10000 + Integer.parseInt(month2) * 100 + Integer.parseInt(day2);
+		}
+		java.sql.Date TO_DATE = java.sql.Date.valueOf(fnscoldt);
+		String UNQE_REF_NO = "";
+		UNQE_REF_NO += SPNS_BANK_ID.substring(0, 4);
+		Pain10_sequence sec = new Pain10_sequence();
+		String sequenceNo = String.format("%031d", sec.getSequence());
+//		String sequenceNo = String.format("%06d", sec.getSecuence());
+		UNQE_REF_NO += sequenceNo;
+
+		String SPONS_BANK_IFSC = " ";
+		String SPONS_BANK_MICR = " ";
+		if (mmbid.length() == 11) {
+			SPONS_BANK_IFSC = mmbid;
+		} else if (mmbid.length() == 9) {
+			SPONS_BANK_MICR = mmbid;
+		}
+
+		String DRAW_BANK_IFSC = " ";
+		String DRAW_BANK_MICR = " ";
+		if (mmbid2.length() == 11) {
+			DRAW_BANK_IFSC = mmbid2;
+		} else if (mmbid2.length() == 9) {
+			DRAW_BANK_MICR = mmbid2;
+		}
+
+//		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+//		String formattedDate = LocalDate.now().format(formatter);
+
+		String AMT_DEBIT_TYPE = " ";
+		String CBS_ERR_NO = " ";
+		String TECHNI_STATUS = "00";
+
+		if (col_amount != null) {
+			AMT_IN_FIGURES = Double.parseDouble(col_amount);
+			AMT_DEBIT_TYPE = "F";
+		} else if (col_amount == null && max_amount != null) {
+			AMT_IN_FIGURES = Double.parseDouble(max_amount);
+			AMT_DEBIT_TYPE = "M";
+		}
+
+		String status2 = "00";
+		if (TECHNI_STATUS.equals(" ")) {
+			status2 = "00";
+		}
+		String BRCH_CODE = " ";
+		String CNCL_REASON = " ";
+		String REJECT_REASON = " ";
+		String[] branch_code = folderName.split("-");
+
+		String BRCH_NO = ExtractProp.getInstance().getExtractProperty(branch_code[4].substring(0, 3));
+
+		log.info("All data are extracted from Xml file: " + fileName + " in folder: " + folderName);
+		try {
+			Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+//    			basic validation here
+			if (UNQE_REF_NO == null || UNQE_REF_NO.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3344";
+			}
+			if (mmbid == null || mmbid.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3442";
+			}
+			if (SPNS_LOGN_ID == null || SPNS_LOGN_ID.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "9642";
+			}
+			if (FREQUENCY1.equals("RCUR")) {
+				if (FROM_DATE == null) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "3454";
+				}
+				if (FREQUENCY2 == null || FREQUENCY2.equals(" ")) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "3468";
+				}
+			} else if (FREQUENCY1.equals("OOFF")) {
+				if (FROM_DATE == null) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "3454";
+				}
+			} else {
+				if (FROM_DATE == null) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "3468";
+				}
+			}
+
+			if ((col_amount == null || col_amount.equals(" ")) && (max_amount == null || max_amount.equals(" "))) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3232";
+			}
+
+			if (SERVICE_PROVIDER == null || SERVICE_PROVIDER.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "8881";
+			}
+			if (UTILITY_CODE == null || UTILITY_CODE.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "8885";
+			}
+			if (CATE_CODE == null || CATE_CODE.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "9242";
+			}
+			if (PROPRIETARY == null || PROPRIETARY.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "9842";
+			}
+			if (CUST_NAME == null || CUST_NAME.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "6624";
+			}
+			if (ACCT_TYPE == null || ACCT_TYPE.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "6671";
+			}
+
+			String ACMM_UMRN_STATUS = "";
+			PreparedStatement selectStmt = conn.prepareStatement(checkACMMEntry);
+			selectStmt.setString(1, "003");
+			selectStmt.setString(2, ACH_UMRN);
+			// Entry already in ACMM check
+			ResultSet rs = selectStmt.executeQuery();
+			if (rs.next()) {
+				ACMM_UMRN_STATUS = rs.getString("UMRN_STATUS");
+				if (ACMM_UMRN_STATUS.equals("00") || ACMM_UMRN_STATUS.equals("02")) {
+					if (AMT_DEBIT_TYPE.equals("F") || AMT_DEBIT_TYPE.equals("M")) {
+						String cleaned = ACCT_NO.replaceAll("\\s+", "");
+						if (cleaned.matches("^0*$")) {
+							TECHNI_STATUS = "01";
+							CBS_ERR_NO = "4983";
+						}
+					}
+				} else {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "3328";
+				}
+				boolean checkDigit = false;
+				String beneficiarysBankAccountnumber = Utility.convertTo17Chars(ACCT_NO);
+				beneficiarysBankAccountnumber = Utility.removeLeadingZeros(beneficiarysBankAccountnumber);
+				if (beneficiarysBankAccountnumber == null || beneficiarysBankAccountnumber.length() != 11) {
+					checkDigit = false;
+				} else {
+					checkDigit = CalculateCheckDigit.validateCheckDigit(beneficiarysBankAccountnumber);
+				}
+				if (!TECHNI_STATUS.equals("01") && !checkDigit) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "108";
+				}
+			} else {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "188";
+			}
+
+//            Getting rejection code from ACHE  
+			if (TECHNI_STATUS.equals("01")) {
+				PreparedStatement getRejectionCode = conn.prepareStatement(fetchRejectionQuery);
+				getRejectionCode.setString(1, CBS_ERR_NO);
+				ResultSet rsRejectionCode = getRejectionCode.executeQuery();
+				if (rsRejectionCode.next()) {
+					REJECT_REASON = rsRejectionCode.getString(1);
+				}
+			}
+
+			PreparedStatement insertStmt = conn.prepareStatement(insertAchtSQL);
+			insertStmt.setString(1, "003");
+			insertStmt.setString(2, "A");
+			insertStmt.setString(3, ACCT_NO);
+			insertStmt.setString(4, UNQE_REF_NO);
+			insertStmt.setString(5, SPONS_BANK_IFSC);
+			insertStmt.setString(6, SPONS_BANK_MICR);// no value
+			insertStmt.setString(7, UTILITY_CODE);
+			insertStmt.setString(8, "R");
+			insertStmt.setObject(9, MANDATE_REC_DATE);
+			insertStmt.setString(10, SERVICE_PROVIDER);
+			insertStmt.setString(11, ACCT_TYPE);
+			insertStmt.setString(12, "000");
+			insertStmt.setString(13, BRCH_CODE);
+			insertStmt.setString(14, DRAW_BANK_IFSC);
+			insertStmt.setString(15, DRAW_BANK_MICR);
+			insertStmt.setDouble(16, AMT_IN_FIGURES);
+			insertStmt.setString(17, " ");
+			insertStmt.setString(18, CONSUMER_REF_NO);
+			insertStmt.setString(19, SCHEME_REF_NO);
+			insertStmt.setString(20, FREQUENCY1);
+			insertStmt.setString(21, FREQUENCY2);
+			insertStmt.setString(22, VALIDITY_PERIOD);
+			insertStmt.setObject(23, FROM_DATE);
+			insertStmt.setObject(24, TO_DATE);
+			insertStmt.setString(25, CUST_NAME);
+			insertStmt.setString(26, CUSTOMER_ADD_ID);
+			insertStmt.setString(27, LANDLINE_NO);
+			insertStmt.setString(28, MOBILE_NO);
+			insertStmt.setString(29, EMAIL_ID);
+			insertStmt.setString(30, CATE_CODE);
+			insertStmt.setString(31, PROPRIETARY);
+			insertStmt.setString(32, AMND_REASON);
+			insertStmt.setString(33, CNCL_REASON);
+			insertStmt.setString(34, REJECT_REASON);
+			insertStmt.setString(35, BRCH_NO);
+			insertStmt.setString(36, TECHNI_STATUS);
+			insertStmt.setObject(37, LocalDate.now());// Integer.parseInt(formattedDate) STATUS DATE
+			insertStmt.setString(38, BRCH_NO);
+			insertStmt.setString(39, ACH_UMRN);
+			insertStmt.setString(40, DCA_IDENTIFIER);
+			insertStmt.setString(41, ACH_SERL_NO);
+			insertStmt.setString(42, CBS_ERR_NO);
+			insertStmt.setString(43, SPNS_BANK_ID);
+			insertStmt.setString(44, SPNS_LOGN_ID);
+			insertStmt.setString(45, SPNS_UNIQ_REFNO);
+			insertStmt.setInt(46, Integer.parseInt(tellerId));
+			insertStmt.setString(47, AMT_DEBIT_TYPE);
+			insertStmt.setInt(48, 0);
+			insertStmt.setString(49, " ");
+			insertStmt.setString(50, " ");
+			insertStmt.setString(51, fileName);
+			insertStmt.setString(52, folderName);
+			insertStmt.setString(53, " ");
+			insertStmt.setString(54, immagename1);
+			insertStmt.setString(55, immagename2);
+			insertStmt.setString(56, status2);
+
+			int rowsAffected = insertStmt.executeUpdate();
+			log.info("Rows inserted: " + rowsAffected);
+			log.info("After reading file succesfully a new row added in data base for xml file: " + fileName);
+
+			if (conn != null)
+				conn.close();
+
+			if (TECHNI_STATUS.equals(" ")) {
+				File[] files = dir.listFiles();
+				for (File file : files) {
+					if (file.getName().equals(fileName) || file.getName().equals(immagename1)
+							|| file.getName().equals(immagename2)) {
+						if (file.isFile()) {
+							File destinationFile = new File(destinationSuccessFolder, file.getName());
+							if (file.renameTo(destinationFile)) {
+								log.info("Moved file: " + file.getName());
+							} else {
+								log.info("Failed to move file: " + file.getName());
+							}
+						}
+					}
+				}
+			} else {
+				File[] files = dir.listFiles();
+				for (File file : files) {
+					if (file.getName().equals(fileName) || file.getName().equals(immagename1)
+							|| file.getName().equals(immagename2)) {
+						if (file.isFile()) {
+							File destinationFile = new File(destinationFailFolder, file.getName());
+							if (file.renameTo(destinationFile)) {
+								log.info("Moved file: " + file.getName());
+							} else {
+								log.info("Failed to move file: " + file.getName());
+							}
+						}
+					}
+				}
+			}
+		} catch (SQLException e) {
+			log.error("Sql exception , data can not stored in data base for file: " + fileName + " in folder: "
+					+ folderName + e);
+		}
+	}
+}
+
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+import java.io.File;
+import java.io.UnsupportedEncodingException;
+import java.security.SecureRandom;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Calendar;
+import java.util.Date;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.sbi.tcs.pain10Util.ExtractProp;
+import com.sbi.tcs.pain10Util.Pain10_sequence;
+import com.sbi.tcs.pain10Util.Utility;
+
+public class UpdateTableForCancel {
+	private static String DB_URL = ExtractProp.getInstance().getExtractProperty("DB_URL");
+	private static String USER = ExtractProp.getInstance().getExtractProperty("USER");
+	private static String PASS = ExtractProp.getInstance().getExtractProperty("PASS");
+	private static final String Key = ExtractProp.getInstance().getExtractProperty("Key");
+    private static final String IV = ExtractProp.getInstance().getExtractProperty("IV");
+	private static final String insertAchtSQL = ExtractProp.getInstance().getExtractProperty("insertAchtSQL");
+	private static final String getDatafromACMM = ExtractProp.getInstance().getExtractProperty("getDatafromACMM");
+	private static final String fetchRejectionQuery = ExtractProp.getInstance()
+			.getExtractProperty("fetchRejectionQuery");
+	private static final String insertACMH = ExtractProp.getInstance().getExtractProperty("insertACMH");
+	private static final String updateAcmmForCancel = ExtractProp.getInstance()
+			.getExtractProperty("updateAcmmForCancel");
+	private static final String insertLnftSQL = ExtractProp.getInstance().getExtractProperty("insertLNFT");
+	private static final String tellerId = ExtractProp.getInstance().getExtractProperty("tellerId");
+
+	private static final Logger log = LogManager.getLogger(UpdateTableForCreate.class);
+	static {
+		try {
+			DB_URL = Utility.aesDecrypt(Key, IV, DB_URL);
+			USER = Utility.aesDecrypt(Key, IV, USER);
+			PASS = Utility.aesDecrypt(Key, IV, PASS);
+		} catch (UnsupportedEncodingException ue) {
+			log.info("Error when getting value from property file ",ue);
+		}
+	}
+	public void updateTableWithDocument3(Pain_11_document data, String fileName, String folderName,
+			File destinationFailFolder, File destinationSuccessFolder, File dir) {
+		log.info("data goes for extarcted and put in data base for file: " + fileName + "in folder: " + folderName);
+		String SPNS_UNIQ_REFNO = " ";
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getGrpHdr() != null && data.getMndtCxlReq().getGrpHdr().getMsgId()!=null) {
+			SPNS_UNIQ_REFNO = data.getMndtCxlReq().getGrpHdr().getMsgId();
+		}
+
+		String credtm = " ";
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getGrpHdr() != null && data.getMndtCxlReq().getGrpHdr().getCreDtTm()!=null) {
+			credtm = data.getMndtCxlReq().getGrpHdr().getCreDtTm();
+		}
+
+		String mmbUTILITY_CODE = " ";
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getGrpHdr() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstdAgt() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstdAgt().getFinInstnId() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstdAgt().getFinInstnId().getClrSysMmbId() != null) {
+			mmbUTILITY_CODE = data.getMndtCxlReq().getGrpHdr().getInstdAgt().getFinInstnId().getClrSysMmbId()
+					.getMmbId();
+		}
+
+		String mmbid = " ";
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getGrpHdr() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstgAgt() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstgAgt().getFinInstnId() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstgAgt().getFinInstnId().getClrSysMmbId() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInstgAgt().getFinInstnId().getClrSysMmbId().getMmbId() !=null) {
+			mmbid = data.getMndtCxlReq().getGrpHdr().getInstgAgt().getFinInstnId().getClrSysMmbId().getMmbId();
+		}
+
+		String CNCL_REASON = " ";
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getUndrlygCxlDtls() != null
+				&& data.getMndtCxlReq().getUndrlygCxlDtls().getCxlRsn() != null
+				&& data.getMndtCxlReq().getUndrlygCxlDtls().getCxlRsn().getRsn() != null
+				&& data.getMndtCxlReq().getUndrlygCxlDtls().getCxlRsn().getRsn().getPrtry() !=null) {
+			CNCL_REASON = data.getMndtCxlReq().getUndrlygCxlDtls().getCxlRsn().getRsn().getPrtry();
+		}
+
+		String ACH_UMRN = " ";
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getUndrlygCxlDtls() != null
+				&& data.getMndtCxlReq().getUndrlygCxlDtls().getOrgnlMndt() != null) {
+			ACH_UMRN = data.getMndtCxlReq().getUndrlygCxlDtls().getOrgnlMndt().getOrgnlMndtId();
+		}
+
+		String DCA_IDENTIFIER = " ";
+
+		if (data != null && data.getMndtCxlReq() != null && data.getMndtCxlReq().getGrpHdr() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInitgpty() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInitgpty().getId() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInitgpty().getId().getOrgid() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInitgpty().getId().getOrgid().getOthr() != null
+				&& data.getMndtCxlReq().getGrpHdr().getInitgpty().getId().getOrgid().getOthr().getId() != null) {
+
+			DCA_IDENTIFIER = data.getMndtCxlReq().getGrpHdr().getInitgpty().getId().getOrgid().getOthr().getId();
+		}
+		String REJECT_REASON = " ";
+		String TECHNI_STATUS = "04";
+		String CBS_ERR_NO = " ";
+
+		log.info("All data are extracted from Xml file: " + fileName + " in folder: " + folderName);
+		try {
+			Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+			PreparedStatement selectStmt = conn.prepareStatement(getDatafromACMM);
+			selectStmt.setString(1, ACH_UMRN);
+			ResultSet rs = selectStmt.executeQuery();
+			String ACMM_ACCT_NO = " ";
+			String ACMM_UTILITY_CODE = " ";
+			String ACMM_SERVICE_PROVIDER = " ";
+			String ACMM_ACCT_TYPE = " ";
+			String ACMM_cust_bank = " ";
+			String ACMM_BRCH_CODE = " ";
+			Double ACMM_AMT_IN_FIGURES = 0.0;
+			String ACMM_amount_word = " ";
+			String ACMM_CONSUMER_REF_NO = " ";
+			String ACMM_SCHEME_REF_NO = " ";
+			String ACMM_FREQUENCY1 = " ";
+			String ACMM_FREQUENCY2 = " ";
+			String ACMM_VALIDITY_PERIOD = " ";
+			Date ACMM_FROM_DATE = null;
+			Date ACMM_TO_DATE = null;
+			String ACMM_CUST_NAME = " ";
+			String ACMM_CUSTOMER_ADD_ID = " ";
+			String ACMM_LANDLINE_NO = " ";
+			String ACMM_MOBILE_NO = " ";
+			String ACMM_EMAIL_ID = " ";
+			String ACMM_CATE_CODE = " ";
+			String ACMM_PROPRIETARY = " ";
+			String ACMM_amnd_rsn = " ";
+			String ACMM_AMT_DEBIT_TYPE = " ";
+			String ACMM_DEBIT_FILE_COUNT = " ";
+			String ACMM_INST_NO = " ";
+			String ACMM_UMRN_NO = " ";
+			String ACMM_UNQE_REF_NO = " ";
+			String ACMM_SPONS_BANK_IFSC = " ";
+			String ACMM_SPONS_BANK_MICR = " ";
+			java.sql.Date ACMM_MANDATE_REC_DATE = null;
+			String ACMM_DRAW_BANK_IFSC = " ";
+			String ACMM_DRAW_BANK_MICR = " ";
+			String ACMM_CNCL_REASON = " ";
+			String ACMM_TXN_BRCH_NO = " ";
+			String ACMM_ORGN_SOURCE = " ";
+			String ACMM_DCA_IDENTIFR = " ";
+			String ACMM_UMRN_STATUS = " ";
+			java.sql.Date ACMM_STATUS_DATE = null;
+			String ACMM_MAN_CHR = " ";
+			java.sql.Date ACMM_LAST_FILE_DATE = null;
+
+			if (rs.next()) {
+				ACMM_ACCT_NO = rs.getString("ACCT_NO");
+				ACMM_UTILITY_CODE = rs.getString("UTILITY_CODE");
+				ACMM_SERVICE_PROVIDER = rs.getString("SERVICE_PROVIDER");
+				ACMM_ACCT_TYPE = rs.getString("ACCT_TYPE");
+				ACMM_cust_bank = rs.getString("CUST_BANK");
+				ACMM_BRCH_CODE = rs.getString("BRCH_CODE");
+				ACMM_AMT_IN_FIGURES = rs.getDouble("AMT_IN_FIGURES");
+				ACMM_amount_word = rs.getString("AMOUNT_WORDS");
+				ACMM_CONSUMER_REF_NO = rs.getString("CONSUMER_REF_NO");
+				ACMM_SCHEME_REF_NO = rs.getString("SCHEME_REF_NO");
+				ACMM_FREQUENCY1 = rs.getString("FREQUENCY1");
+				ACMM_FREQUENCY2 = rs.getString("FREQUENCY2");
+				ACMM_VALIDITY_PERIOD = rs.getString("VALIDITY_PERIOD");
+				ACMM_FROM_DATE = rs.getDate("FROM_DATE");
+				ACMM_TO_DATE = rs.getDate("TO_DATE");
+				ACMM_CUST_NAME = rs.getString("CUST_NAME");
+				ACMM_CUSTOMER_ADD_ID = rs.getString("CUSTOMER_ADD_ID");
+				ACMM_LANDLINE_NO = rs.getString("LANDLINE_NO");
+				ACMM_MOBILE_NO = rs.getString("MOBILE_NO");
+				ACMM_EMAIL_ID = rs.getString("EMAIL_ID");
+				ACMM_CATE_CODE = rs.getString("CATE_CODE");
+				ACMM_PROPRIETARY = rs.getString("PROPRIETRY");
+				ACMM_amnd_rsn = rs.getString("AMND_REASON");
+				ACMM_AMT_DEBIT_TYPE = rs.getString("AMT_DEBIT_TYPE");
+				ACMM_DEBIT_FILE_COUNT = rs.getString("DEBIT_FILE_COUNT");
+				ACMM_INST_NO = rs.getString("INST_NO");
+				ACMM_MAN_CHR = rs.getString("MAN_CHR");
+				ACMM_STATUS_DATE = rs.getDate("STATUS_DATE");
+				ACMM_UMRN_STATUS = rs.getString("UMRN_STATUS");
+				ACMM_DCA_IDENTIFR = rs.getString("DCA_IDENTIFR");
+				ACMM_ORGN_SOURCE = rs.getString("ORGN_SOURCE");
+				ACMM_TXN_BRCH_NO = rs.getString("TXN_BRCH_NO");
+				ACMM_CNCL_REASON = rs.getString("CNCL_REASON");
+				ACMM_DRAW_BANK_MICR = rs.getString("DRAW_BANK_MICR");
+				ACMM_DRAW_BANK_IFSC = rs.getString("DRAW_BANK_IFSC");
+				ACMM_MANDATE_REC_DATE = rs.getDate("MANDATE_REC_DATE");
+				ACMM_SPONS_BANK_MICR = rs.getString("SPONS_BANK_MICR");
+				ACMM_SPONS_BANK_IFSC = rs.getString("SPONS_BANK_IFSC");
+				ACMM_UNQE_REF_NO = rs.getString("UNQE_REF_NO");
+				ACMM_UMRN_NO = rs.getString("UMRN_NO");
+				ACMM_LAST_FILE_DATE = rs.getDate("LAST_FILE_DATE");
+			} else {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "188";
+			}
+
+			String[] fileNameParts = fileName.split("-");
+			DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMddyyyy");
+			LocalDate localDate = LocalDate.now();
+			java.sql.Date MANDATE_REC_DATE = java.sql.Date.valueOf(localDate);
+			String ACH_SERL_NO = fileNameParts[5];
+			String SPNS_BANK_ID = fileNameParts[2];
+			String SPNS_LOGN_ID = fileNameParts[3];
+
+			String UNQE_REF_NO = "";
+			UNQE_REF_NO += SPNS_BANK_ID.substring(0, 4);
+			Pain10_sequence sec = new Pain10_sequence();
+			String sequenceNo = String.format("%031d", sec.getSequence());
+//			String sequenceNo = String.format("%06d", sec.getSecuence());
+			UNQE_REF_NO += sequenceNo;
+
+			String SPONS_BANK_IFSC = " ";
+			String SPONS_BANK_MICR = " ";
+			if (mmbid.length() == 11) {
+				SPONS_BANK_IFSC = mmbid;
+			} else if (mmbid.length() == 9) {
+				SPONS_BANK_MICR = mmbid;
+			}
+
+			String DRAW_BANK_IFSC = " ";
+			String DRAW_BANK_MICR = " ";
+			if (mmbUTILITY_CODE.length() == 11) {
+				DRAW_BANK_IFSC = mmbUTILITY_CODE;
+			} else if (mmbUTILITY_CODE.length() == 9) {
+				DRAW_BANK_MICR = mmbUTILITY_CODE;
+			}
+			String[] branch_code = folderName.split("-");
+			String BRCH_NO = ExtractProp.getInstance().getExtractProperty(branch_code[4].substring(0, 3));
+
+//    			basic validation here
+			if (UNQE_REF_NO == null || UNQE_REF_NO.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3344";
+			}
+			if (mmbid == null || mmbid.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3442";
+			}
+			if (SPNS_LOGN_ID == null || SPNS_LOGN_ID.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "9642";
+			}
+
+			if (!ACMM_UMRN_STATUS.equals("00") && !ACMM_UMRN_STATUS.equals("02")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3328";
+			}
+
+//			-------------------------------ACMM TO ACHM----------------------------
+			if (TECHNI_STATUS.equals("04")) {
+				PreparedStatement insertAcmh = conn.prepareStatement(insertACMH);
+				insertAcmh.setString(1, ACMM_INST_NO); // INST_NO
+				insertAcmh.setString(2, ACMM_UMRN_NO); // UMRN_NO
+				insertAcmh.setString(3, ACMM_ACCT_NO); // ACCT_NO
+				insertAcmh.setString(4, ACMM_UNQE_REF_NO); // UNQE_REF_NO
+				insertAcmh.setString(5, ACMM_SPONS_BANK_IFSC); // SPONS_BANK_IFSC
+				insertAcmh.setString(6, ACMM_SPONS_BANK_MICR); // SPONS_BANK_MICR (NUMBER)
+				insertAcmh.setString(7, ACMM_UTILITY_CODE); // UTILITY_CODE
+				insertAcmh.setObject(8, ACMM_MANDATE_REC_DATE); // MANDATE_REC_DATE (DATE)
+				insertAcmh.setString(9, ACMM_SERVICE_PROVIDER); // SERVICE_PROVIDER
+				insertAcmh.setString(10, ACMM_ACCT_TYPE); // ACCT_TYPE
+				insertAcmh.setString(11, ACMM_cust_bank); // CUST_BANK
+				insertAcmh.setString(12, ACMM_BRCH_CODE); // BRCH_CODE
+				insertAcmh.setString(13, ACMM_DRAW_BANK_IFSC); // DRAW_BANK_IFSC
+				insertAcmh.setString(14, ACMM_DRAW_BANK_MICR); // DRAW_BANK_MICR (NUMBER)
+				insertAcmh.setDouble(15, ACMM_AMT_IN_FIGURES); // AMT_IN_FIGURES (NUMBER)
+				insertAcmh.setString(16, ACMM_amount_word); // AMOUNT_WORDS
+				insertAcmh.setString(17, ACMM_CONSUMER_REF_NO); // CONSUMER_REF_NO
+				insertAcmh.setString(18, ACMM_SCHEME_REF_NO); // SCHEME_REF_NO
+				insertAcmh.setString(19, ACMM_FREQUENCY1); // FREQUENCY1
+				insertAcmh.setString(20, ACMM_FREQUENCY2); // FREQUENCY2
+				insertAcmh.setString(21, ACMM_VALIDITY_PERIOD); // VALIDITY_PERIOD
+				insertAcmh.setObject(22, ACMM_FROM_DATE); // FROM_DATE (DATE)
+				insertAcmh.setObject(23, ACMM_TO_DATE); // TO_DATE (DATE)
+				insertAcmh.setString(24, ACMM_CUST_NAME); // CUST_NAME
+				insertAcmh.setString(25, ACMM_CUSTOMER_ADD_ID); // CUSTOMER_ADD_ID
+				insertAcmh.setString(26, ACMM_LANDLINE_NO); // LANDLINE_NO (default '0')
+				insertAcmh.setString(27, ACMM_MOBILE_NO); // MOBILE_NO (default '0')
+				insertAcmh.setString(28, ACMM_EMAIL_ID); // EMAIL_ID
+				insertAcmh.setString(29, ACMM_CATE_CODE); // CATE_CODE
+				insertAcmh.setString(30, ACMM_PROPRIETARY); // PROPRIETRY
+				insertAcmh.setString(31, ACMM_amnd_rsn); // AMND_REASON
+				insertAcmh.setString(32, ACMM_CNCL_REASON); // CNCL_REASON
+				insertAcmh.setString(33, ACMM_TXN_BRCH_NO); // TXN_BRCH_NO
+				insertAcmh.setString(34, ACMM_ORGN_SOURCE); // ORGN_SOURCE
+				insertAcmh.setString(35, ACMM_DCA_IDENTIFR); // DCA_IDENTIFR
+				insertAcmh.setString(36, ACMM_UMRN_STATUS); // UMRN_STATUS
+				insertAcmh.setObject(37, ACMM_STATUS_DATE); // STATUS_DATE (DATE)
+				insertAcmh.setString(38, ACMM_AMT_DEBIT_TYPE); // AMT_DEBIT_TYPE
+				insertAcmh.setString(39, ACMM_MAN_CHR); // MAN_CHR (NUMBER)
+				insertAcmh.setString(40, ACMM_DEBIT_FILE_COUNT); // DEBIT_FILE_COUNT (NUMBER)
+				insertAcmh.setObject(41, ACMM_LAST_FILE_DATE); // LAST_FILE_DATE (DATE)
+				insertAcmh.setTimestamp(42, new Timestamp(System.currentTimeMillis())); // ACMH_TRN_TIME (TIMESTAMP)
+				insertAcmh.setObject(43, new java.sql.Date(System.currentTimeMillis())); // ACMH_TRN_DATE (DATE)
+
+				int rowsAffectedACHM = insertAcmh.executeUpdate();
+				log.info("Rows inserted: " + rowsAffectedACHM + "for ACMM backup to ACMH");
+
+//			-------------------------------------Update ACMM with cancellation condition -------------------------------------
+
+				PreparedStatement updateAcmm = conn.prepareStatement(updateAcmmForCancel);
+				updateAcmm.setString(1, CNCL_REASON);
+				updateAcmm.setObject(2, new java.sql.Date(System.currentTimeMillis()));
+				updateAcmm.setString(3, "01");
+				updateAcmm.setString(4, DCA_IDENTIFIER);
+				updateAcmm.setString(5, UNQE_REF_NO);
+				updateAcmm.setString(6, SPONS_BANK_IFSC);
+				if (SPONS_BANK_MICR.equals(" ")) {
+					updateAcmm.setNull(7, java.sql.Types.INTEGER);
+				} else {
+					updateAcmm.setInt(7, Integer.parseInt(SPONS_BANK_MICR));
+				}
+				updateAcmm.setString(8, DRAW_BANK_IFSC);
+				if (DRAW_BANK_MICR.equals(" ")) {
+					updateAcmm.setNull(9, java.sql.Types.INTEGER);
+				} else {
+					updateAcmm.setInt(9, Integer.parseInt(DRAW_BANK_MICR));
+				}
+				updateAcmm.setString(10, "003");
+				updateAcmm.setString(11, ACMM_UMRN_NO);
+				updateAcmm.setString(12, ACMM_ACCT_NO);
+				int rowsAffectedACMM = updateAcmm.executeUpdate();
+				log.info("Rows inserted: " + rowsAffectedACMM + "for ACMM backup to ACMH");
+
+			}
+
+//          Getting rejection code from ACHE  
+			if (TECHNI_STATUS.equals("01")) {
+				PreparedStatement getRejectionCode = conn.prepareStatement(fetchRejectionQuery);
+				getRejectionCode.setString(1, CBS_ERR_NO);
+				ResultSet rsRejectionCode = getRejectionCode.executeQuery();
+				if (rsRejectionCode.next()) {
+					REJECT_REASON = rsRejectionCode.getString(1);
+				} else {
+					CBS_ERR_NO = "155";
+					getRejectionCode.setString(1, CBS_ERR_NO);
+					ResultSet defaultRejectionCode = getRejectionCode.executeQuery();
+					if (defaultRejectionCode.next()) {
+						REJECT_REASON = defaultRejectionCode.getString(1);
+					}
+				}
+			}
+
+			PreparedStatement insertStmt = conn.prepareStatement(insertAchtSQL);
+			insertStmt.setString(1, "003"); // INST_NO
+			insertStmt.setString(2, "D"); // ACTIONACMM_
+			insertStmt.setString(3, ACMM_ACCT_NO);
+			insertStmt.setString(4, UNQE_REF_NO);
+			insertStmt.setString(5, SPONS_BANK_IFSC);
+			insertStmt.setString(6, SPONS_BANK_MICR);
+			insertStmt.setString(7, ACMM_UTILITY_CODE);
+			insertStmt.setString(8, "R"); // ORGN_SOURCE
+			insertStmt.setObject(9, MANDATE_REC_DATE);
+			insertStmt.setString(10, ACMM_SERVICE_PROVIDER);
+			insertStmt.setString(11, ACMM_ACCT_TYPE);
+			insertStmt.setString(12, ACMM_cust_bank);
+			insertStmt.setString(13, ACMM_BRCH_CODE);
+			insertStmt.setString(14, DRAW_BANK_IFSC);
+			insertStmt.setString(15, DRAW_BANK_MICR);
+			insertStmt.setDouble(16, ACMM_AMT_IN_FIGURES);
+			insertStmt.setString(17, ACMM_amount_word);
+			insertStmt.setString(18, ACMM_CONSUMER_REF_NO);
+			insertStmt.setString(19, ACMM_SCHEME_REF_NO);
+			insertStmt.setString(20, ACMM_FREQUENCY1);
+			insertStmt.setString(21, ACMM_FREQUENCY2);
+			insertStmt.setString(22, ACMM_VALIDITY_PERIOD);
+			insertStmt.setObject(23, ACMM_FROM_DATE);
+			insertStmt.setObject(24, ACMM_TO_DATE);
+			insertStmt.setString(25, ACMM_CUST_NAME);
+			insertStmt.setString(26, ACMM_CUSTOMER_ADD_ID);
+			insertStmt.setString(27, ACMM_LANDLINE_NO);
+			insertStmt.setString(28, ACMM_MOBILE_NO);
+			insertStmt.setString(29, ACMM_EMAIL_ID);
+			insertStmt.setString(30, ACMM_CATE_CODE);
+			insertStmt.setString(31, ACMM_PROPRIETARY);
+			insertStmt.setString(32, ACMM_amnd_rsn);
+			insertStmt.setString(33, CNCL_REASON);
+			insertStmt.setString(34, REJECT_REASON);
+			insertStmt.setString(35, BRCH_NO);
+			insertStmt.setString(36, TECHNI_STATUS);
+			insertStmt.setObject(37, LocalDate.now()); // STATUS_DATE
+			insertStmt.setString(38, BRCH_NO);
+			insertStmt.setString(39, ACH_UMRN);
+			insertStmt.setString(40, DCA_IDENTIFIER);
+			insertStmt.setString(41, ACH_SERL_NO);
+			insertStmt.setString(42, CBS_ERR_NO);
+			insertStmt.setString(43, SPNS_BANK_ID);
+			insertStmt.setString(44, SPNS_LOGN_ID);
+			insertStmt.setString(45, SPNS_UNIQ_REFNO);
+			insertStmt.setInt(46, Integer.parseInt(tellerId)); // TELLER_ID
+			insertStmt.setString(47, ACMM_AMT_DEBIT_TYPE);
+			insertStmt.setInt(48, 0); // MAKER_ID
+			insertStmt.setString(49, " "); // CHECKER_ID
+			insertStmt.setString(50, " "); // OUTPUT_FILE_NAME
+			insertStmt.setString(51, fileName); // INPUT_FILE_NAME
+			insertStmt.setString(52, folderName); // INPUT_FOLDER_NAME
+			insertStmt.setString(53, " "); // OUTPUT_FOLDER_NAME
+			insertStmt.setString(54, " "); // IMAGE_NAME_1
+			insertStmt.setString(55, " "); // IMAGE_NAME_2
+			insertStmt.setString(56, "41"); // STATUS
+//			insertStmt.setString(56, "00"); // STATUS
+
+			int rowsAffected = insertStmt.executeUpdate();
+			log.info("Rows inserted: " + rowsAffected);
+
+//			INSERT into LNFT
+			if (TECHNI_STATUS.equals("04")) {
+				String sourceId = "HA";
+				Calendar calendar = Calendar.getInstance();
+				int dayOfTheYear = calendar.get(Calendar.DAY_OF_YEAR);
+				Date date = new Date();
+				SimpleDateFormat SimpleDateFormat = new SimpleDateFormat("yy-hh-mm-ss-SSS");
+				String parse = SimpleDateFormat.format(date);
+				int i = new SecureRandom().nextInt(900000) + 100000;
+				String[] split = parse.split("-");
+				String REQUEST_REFERNCE_NUMBER = "SBI" + sourceId + split[0] + dayOfTheYear + split[1] + split[2]
+						+ split[3] + split[4] + i;
+
+				PreparedStatement insertLnft = conn.prepareStatement(insertLnftSQL);
+				insertLnft.setString(1, ACMM_ACCT_NO);
+				insertLnft.setString(2, ACH_UMRN);
+				insertLnft.setString(3, BRCH_NO);
+				insertLnft.setString(4, "47"); // Status
+				insertLnft.setString(5, tellerId);
+				insertLnft.setString(6, REQUEST_REFERNCE_NUMBER);
+				insertLnft.setString(7, tellerId);
+				insertLnft.setObject(8, LocalDate.now());
+				insertLnft.setString(9, "D");
+
+				int rowsInsertedLNFT = insertLnft.executeUpdate();
+				log.info("Rows inserted into LNFT : " + rowsInsertedLNFT);
+				log.info("After reading file succesfully a new row added in data base for xml file: " + fileName);
+			}
+			if (conn != null)
+				conn.close();
+
+			if (TECHNI_STATUS.equals(" ")) {
+				File[] files = dir.listFiles();
+				for (File file : files) {
+					if (file.getName().equals(fileName)) {
+						if (file.isFile()) {
+							File destinationFile = new File(destinationSuccessFolder, file.getName());
+							if (file.renameTo(destinationFile)) {
+								log.info("Moved file: " + file.getName());
+							} else {
+								log.info("Failed to move file: " + file.getName());
+							}
+						}
+					}
+				}
+			} else {
+				File[] files = dir.listFiles();
+				for (File file : files) {
+					if (file.getName().equals(fileName)) {
+						if (file.isFile()) {
+							File destinationFile = new File(destinationFailFolder, file.getName());
+							if (file.renameTo(destinationFile)) {
+								log.info("Moved file: " + file.getName());
+							} else {
+								log.info("Failed to move file: " + file.getName());
+							}
+						}
+					}
+				}
+			}
+		} catch (SQLException e) {
+			log.error("Can not connect with database" + e.getMessage());
+		}
+	}
+}
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+import java.io.File;
+import java.io.UnsupportedEncodingException;
+import java.sql.Connection;
+import java.sql.Date;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.sbi.tcs.pain10Util.ExtractProp;
+import com.sbi.tcs.pain10Util.Pain10_sequence;
+import com.sbi.tcs.pain10Util.Utility;
+import com.tcs.bancs.microservices.util.CalculateCheckDigit;
+
+public class UpdateTableForCreate {
+	private static String DB_URL = ExtractProp.getInstance().getExtractProperty("DB_URL");
+	private static String USER = ExtractProp.getInstance().getExtractProperty("USER");
+	private static String PASS = ExtractProp.getInstance().getExtractProperty("PASS");
+	private static final String Key = ExtractProp.getInstance().getExtractProperty("Key");
+    private static final String IV = ExtractProp.getInstance().getExtractProperty("IV");
+	private static final String insertAchtSQL = ExtractProp.getInstance().getExtractProperty("insertAchtSQL");
+	private static final String checkACMMEntry = ExtractProp.getInstance().getExtractProperty("checkACMMEntry");
+	private static final String AchtCheckForUMRN = ExtractProp.getInstance().getExtractProperty("AchtCheckForUMRN");
+	private static final String fetchRejectionQuery = ExtractProp.getInstance()
+			.getExtractProperty("fetchRejectionQuery");
+	private static final String checkSponserAllowCard = ExtractProp.getInstance()
+			.getExtractProperty("checkSponserAllowCard");
+	private static final String checkTreds = ExtractProp.getInstance().getExtractProperty("checkTreds");
+	private static final String checkAmount = ExtractProp.getInstance().getExtractProperty("checkAmount");
+	private static final Logger log = LogManager.getLogger(UpdateTableForCreate.class);
+	private static final String tellerId = ExtractProp.getInstance().getExtractProperty("tellerId");
+	static {
+		try {
+			DB_URL = Utility.aesDecrypt(Key, IV, DB_URL);
+			USER = Utility.aesDecrypt(Key, IV, USER);
+			PASS = Utility.aesDecrypt(Key, IV, PASS);
+		} catch (UnsupportedEncodingException ue) {
+			log.info("Error when getting value from property file ",ue);
+		}
+	}
+	public void updateTableWithDocument2(Pain_09_Document data, String fileName, String folderName, String immagename1,
+			String immagename2, File destinationFailFolder, File destinationSuccessFolder, File dir) {
+		log.info("data goes for extracted and put in data base for file: " + fileName + "in folder: " + folderName);
+		String msgId = " ";
+		String cred = " ";
+		String DCA_IDENTIFIER = " ";
+		String mmbid = " ";
+		String nm = " ";
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getGrpHdr() != null) {
+
+			msgId = data.getMndtInitnReq().getGrpHdr().getMsgId();
+			cred = data.getMndtInitnReq().getGrpHdr().getCreDtTm();
+
+			if (data.getMndtInitnReq().getGrpHdr().getInitgPty() != null
+					&& data.getMndtInitnReq().getGrpHdr().getInitgPty().getId() != null
+					&& data.getMndtInitnReq().getGrpHdr().getInitgPty().getId().getOrgId() != null
+					&& data.getMndtInitnReq().getGrpHdr().getInitgPty().getId().getOrgId().getOthr() != null) {
+
+				DCA_IDENTIFIER = data.getMndtInitnReq().getGrpHdr().getInitgPty().getId().getOrgId().getOthr().getId();
+			}
+
+			if (data.getMndtInitnReq().getGrpHdr().getInstgAgt() != null
+					&& data.getMndtInitnReq().getGrpHdr().getInstgAgt().getFinInstnId() != null) {
+
+				mmbid = data.getMndtInitnReq().getGrpHdr().getInstgAgt().getFinInstnId().getClrSysMmbId().getMmbId();
+				nm = data.getMndtInitnReq().getGrpHdr().getInstgAgt().getFinInstnId().getNm();
+			}
+		}
+		String mmbUTILITY_CODE = " ";
+		String nm2 = " ";
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getGrpHdr() != null
+				&& data.getMndtInitnReq().getGrpHdr().getInstdAgt() != null
+				&& data.getMndtInitnReq().getGrpHdr().getInstdAgt().getFinInstnId() != null
+				&& data.getMndtInitnReq().getGrpHdr().getInstdAgt().getFinInstnId().getClrSysMmbId() != null) {
+
+			mmbUTILITY_CODE = data.getMndtInitnReq().getGrpHdr().getInstdAgt().getFinInstnId().getClrSysMmbId()
+					.getMmbId();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getGrpHdr() != null
+				&& data.getMndtInitnReq().getGrpHdr().getInstdAgt() != null
+				&& data.getMndtInitnReq().getGrpHdr().getInstdAgt().getFinInstnId() != null) {
+
+			nm2 = data.getMndtInitnReq().getGrpHdr().getInstdAgt().getFinInstnId().getNm();
+		}
+		String ACH_UMRN = " ";
+		String SPNS_UNIQ_REFNO = " ";
+		String CATE_CODE = " ";
+		String PROPRIETARY = " ";
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null) {
+			ACH_UMRN = data.getMndtInitnReq().getMndt().getMndtId();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null) {
+			SPNS_UNIQ_REFNO = data.getMndtInitnReq().getMndt().getMndtReqId();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getTp() != null
+				&& data.getMndtInitnReq().getMndt().getTp().getSvcLvl() != null) {
+			CATE_CODE = data.getMndtInitnReq().getMndt().getTp().getSvcLvl().getPrtry();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getTp() != null
+				&& data.getMndtInitnReq().getMndt().getTp().getLclInstrm() != null) {
+			PROPRIETARY = data.getMndtInitnReq().getMndt().getTp().getLclInstrm().getPrtry();
+		}
+		String FREQUENCY1 = " ";
+		String FREQUENCY2 = " ";
+		String frdt = " ";
+		String frstcolndt = " ";
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getOcrncs() != null) {
+			FREQUENCY1 = data.getMndtInitnReq().getMndt().getOcrncs().getSeqTp();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getOcrncs() != null) {
+			FREQUENCY2 = data.getMndtInitnReq().getMndt().getOcrncs().getFrqcy();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getOcrncs() != null
+				&& data.getMndtInitnReq().getMndt().getOcrncs().getDrtn() != null) {
+			frdt = data.getMndtInitnReq().getMndt().getOcrncs().getDrtn().getFrDt();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getOcrncs() != null) {
+			frstcolndt = data.getMndtInitnReq().getMndt().getOcrncs().getFrstColltnDt();
+		}
+		String fnlcoldt = " ";
+		String maxamt = " ";
+		String colamt = " ";
+		String SERVICE_PROVIDER = " ";
+		String UTILITY_CODE = " ";
+		String mmbACCT_NO = " ";
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getOcrncs() != null) {
+			fnlcoldt = data.getMndtInitnReq().getMndt().getOcrncs().getFnlColltnDt();
+		}
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getColltnAmt()!=null) {
+			colamt = data.getMndtInitnReq().getMndt().getColltnAmt().getAmount();
+
+		} else if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getMaxAmt() != null) {
+			maxamt = data.getMndtInitnReq().getMndt().getMaxAmt().getValue();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getCdtr() != null) {
+			SERVICE_PROVIDER = data.getMndtInitnReq().getMndt().getCdtr().getNm();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getCdtrAcct() != null
+				&& data.getMndtInitnReq().getMndt().getCdtrAcct().getId() != null
+				&& data.getMndtInitnReq().getMndt().getCdtrAcct().getId().getOthr() != null) {
+			UTILITY_CODE = data.getMndtInitnReq().getMndt().getCdtrAcct().getId().getOthr().getId();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getCdtrAgt() != null
+				&& data.getMndtInitnReq().getMndt().getCdtrAgt().getFinInstnId() != null
+				&& data.getMndtInitnReq().getMndt().getCdtrAgt().getFinInstnId().getClrSysMmbId() != null) {
+			mmbACCT_NO = data.getMndtInitnReq().getMndt().getCdtrAgt().getFinInstnId().getClrSysMmbId().getMmbId();
+		}
+		String CUST_NAME = " ";
+		String SCHEME_REF_NO = " ";
+		String ACCT_NO = " ";
+		String ACCT_TYPE = " ";
+		String mmbid4 = " ";
+		String nm5 = " ";
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null) {
+			CUST_NAME = data.getMndtInitnReq().getMndt().getDbtr().getNm();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid().getOthr3() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid().getOthr3().getSchemenm() != null) {
+			SCHEME_REF_NO = data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid().getOthr3().getSchemenm()
+					.getPrtry();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAcct() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAcct().getId() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAcct().getId().getOthr() != null) {
+			ACCT_NO = data.getMndtInitnReq().getMndt().getDbtrAcct().getId().getOthr().getId();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAcct() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAcct().getTp() != null) {
+			ACCT_TYPE = data.getMndtInitnReq().getMndt().getDbtrAcct().getTp().getPrtry();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAgt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAgt().getFinInstnId() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAgt().getFinInstnId().getClrSysMmbId() != null) {
+			mmbid4 = data.getMndtInitnReq().getMndt().getDbtrAgt().getFinInstnId().getClrSysMmbId().getMmbId();
+		}
+
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAgt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtrAgt().getFinInstnId() != null) {
+			nm5 = data.getMndtInitnReq().getMndt().getDbtrAgt().getFinInstnId().getNm();
+		}
+
+		String CONSUMER_REF_NO = " ";
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid().getOthr3() != null) {
+			CONSUMER_REF_NO = data.getMndtInitnReq().getMndt().getDbtr().getId().getPrvtid().getOthr3().getId();
+		}
+
+		String CUSTOMER_ADD_ID = " ";
+		String LANDLINE_NO = " ";
+		String MOBILE_NO = " ";
+		String EMAIL_ID = " ";
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls() != null) {
+			CUSTOMER_ADD_ID = data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getOthr();
+		}
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getPhneNb() != null) {
+			LANDLINE_NO = data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getPhneNb();
+		}
+		//  
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getMobNb() != null) {
+			MOBILE_NO = data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getMobNb();
+		}
+		if (data != null && data.getMndtInitnReq() != null && data.getMndtInitnReq().getMndt() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls() != null
+				&& data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getEmailAdr() != null) {
+			EMAIL_ID = data.getMndtInitnReq().getMndt().getDbtr().getCtctDtls().getEmailAdr();
+		}
+
+		String[] fileNameParts = fileName.split("-");
+		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMddyyyy");
+		LocalDate localDate = LocalDate.now();
+		Date MANDATE_REC_DATE = Date.valueOf(localDate);
+		String ACH_SERL_NO = fileNameParts[5];
+		String SPNS_BANK_ID = fileNameParts[2];
+		String SPNS_LOGN_ID = fileNameParts[3];
+		String VALIDITY_PERIOD = null;
+		if (!fnlcoldt.isEmpty()) {
+			VALIDITY_PERIOD = "F";
+		} else {
+			VALIDITY_PERIOD = "U";
+		}
+
+		String UNQE_REF_NO = "";
+		UNQE_REF_NO += SPNS_BANK_ID.substring(0, 4);
+		Pain10_sequence sec = new Pain10_sequence();
+//		String sequenceNo = String.format("%06d", sec.getSecuence());
+		String sequenceNo = String.format("%031d", sec.getSequence());   
+		UNQE_REF_NO += sequenceNo;
+
+		String SPONS_BANK_IFSC = " ";
+		String SPONS_BANK_MICR = " ";
+		if (mmbid.length() == 11) {
+			SPONS_BANK_IFSC = mmbid;
+		} else if (mmbid.length() == 9) {
+			SPONS_BANK_MICR = mmbid;
+		}
+
+		String BRCH_CODE = " ";
+		String CNCL_REASON = " ";
+		String REJECT_REASON = " ";
+		String[] branch_code = folderName.split("-");
+
+		String BRCH_NO = ExtractProp.getInstance().getExtractProperty(branch_code[4].substring(0, 3));
+
+		String DRAW_BANK_IFSC = " ";
+		String DRAW_BANK_MICR = " ";
+		if (mmbUTILITY_CODE.length() == 11) {
+			DRAW_BANK_IFSC = mmbUTILITY_CODE;
+		} else if (mmbUTILITY_CODE.length() == 9) {
+			DRAW_BANK_MICR = mmbUTILITY_CODE;
+		}
+
+		String AMT_DEBIT_TYPE = " ";
+		String CBS_ERR_NO = " ";
+		String TECHNI_STATUS = "00";
+		Double AMT_IN_FIGURES = 0.0;
+		if (!colamt.equals(" ")) {
+			AMT_IN_FIGURES = Double.parseDouble(colamt);
+			AMT_DEBIT_TYPE = "F";
+		} else if (colamt.equals(" ") && !maxamt.equals(" ")) {
+			AMT_IN_FIGURES = Double.parseDouble(maxamt);
+			AMT_DEBIT_TYPE = "M";
+		}
+
+		int dateAsInt = 0;
+		if (!frstcolndt.equals(" ")) {
+			String[] date = frstcolndt.split("-");
+			String year = date[0];
+			String month = date[1];
+			String day = date[2];
+			dateAsInt = Integer.parseInt(year) * 10000 + Integer.parseInt(month) * 100 + Integer.parseInt(day);
+		}
+		java.sql.Date FROM_DATE = java.sql.Date.valueOf(frstcolndt);
+		int dateAsInt2 = 0;
+		if (!fnlcoldt.equals(" ")) {
+			String[] TO_DATE = fnlcoldt.split("-");
+			String year2 = TO_DATE[0];
+			String month2 = TO_DATE[1];
+			String day2 = TO_DATE[2];
+			dateAsInt2 = Integer.parseInt(year2) * 10000 + Integer.parseInt(month2) * 100 + Integer.parseInt(day2);
+		}
+		java.sql.Date TO_DATE = java.sql.Date.valueOf(fnlcoldt);
+		String formattedDate = LocalDate.now().format(formatter);
+		log.info("All data are extracted from Xml file: " + fileName + " in folder: " + folderName);
+
+		if (UNQE_REF_NO == null || UNQE_REF_NO.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "3344";
+		}
+		if (mmbid == null || mmbid.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "3442";
+		}
+		if (mmbUTILITY_CODE == null || mmbUTILITY_CODE.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "3453";
+		}
+		if (SPNS_LOGN_ID == null || SPNS_LOGN_ID.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "9642";
+		}
+		if (FREQUENCY1.equals("RCUR")) {
+			if (FROM_DATE == null) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3454";
+			}
+			if (FREQUENCY2 == null || FREQUENCY2.equals(" ")) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3468";
+			}
+		} else if (FREQUENCY1.equals("OOFF")) {
+			if (FROM_DATE == null) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3454";
+			}
+		} else {
+			if (FROM_DATE == null) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3468";
+			}
+		}
+		if (AMT_IN_FIGURES == 0.0) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "3232";
+		}
+		if (SERVICE_PROVIDER == null || SERVICE_PROVIDER.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "8881";
+		}
+		if (UTILITY_CODE == null || UTILITY_CODE.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "8885";
+		}
+		if (CATE_CODE == null || CATE_CODE.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "9242";
+		}
+		if (PROPRIETARY == null || PROPRIETARY.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "9842";
+		}
+		if (CUST_NAME == null || CUST_NAME.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "6624";
+		}
+		if (ACCT_TYPE == null || ACCT_TYPE.equals(" ")) {
+			TECHNI_STATUS = "01";
+			CBS_ERR_NO = "6671";
+		}
+
+//	    After basic validation checking null this is prathana suggested changes
+		try {
+			Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+			// Validation before inserting in ACHT
+			// boolean checkForValidation=false;
+			PreparedStatement selectStmt = conn.prepareStatement(checkACMMEntry);
+			selectStmt.setString(1, "003");
+			selectStmt.setString(2, ACH_UMRN);
+			// Entry already in ACMM check
+			ResultSet rs = selectStmt.executeQuery();
+			if (rs.next()) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "199";
+			} else {
+				if (AMT_DEBIT_TYPE.equals("F") || AMT_DEBIT_TYPE.equals("M")) {
+					String cleaned = ACCT_NO.replaceAll("\\s+", "");
+					if (cleaned.matches("^0*$")) {
+						TECHNI_STATUS = "01";
+						CBS_ERR_NO = "4953";
+					}
+				}
+				boolean checkDigit = false;
+				String beneficiarysBankAccountnumber = Utility.convertTo17Chars(ACCT_NO);
+				beneficiarysBankAccountnumber = Utility.removeLeadingZeros(beneficiarysBankAccountnumber);
+				if (beneficiarysBankAccountnumber == null || beneficiarysBankAccountnumber.length() != 11) {
+					checkDigit = false;
+				} else {
+					checkDigit = CalculateCheckDigit.validateCheckDigit(beneficiarysBankAccountnumber);
+				}
+				if (!TECHNI_STATUS.equals("01") && !checkDigit) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "108";
+				}
+			}
+			
+
+			PreparedStatement selectStmt2 = conn.prepareStatement(AchtCheckForUMRN);
+			selectStmt2.setString(1, ACH_UMRN);
+			ResultSet rs2 = selectStmt2.executeQuery();
+			if (!ACH_UMRN.equals(" ")) {
+				if (rs2.next()) {
+					if (!rs2.getString(1).equals("0")) {
+						TECHNI_STATUS = "01";
+						CBS_ERR_NO = "199";
+					}
+				}
+			} else {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "3347";
+			}
+//            checking sponsor bank, treds limit and amount from card file tables 
+			PreparedStatement checkSponsorAllow = conn.prepareStatement(checkSponserAllowCard);
+			checkSponsorAllow.setString(1, UTILITY_CODE);
+			ResultSet rsSponsor = checkSponsorAllow.executeQuery();
+			String SPONSOR_BANK="";
+			if (rsSponsor.next()) {
+				SPONSOR_BANK = rsSponsor.getString(1);
+			}
+			PreparedStatement checkAmt = conn.prepareStatement(checkAmount);
+//			checkAmt.setString(1, UTILITY_CODE);
+			ResultSet rsAmount = checkAmt.executeQuery();
+			String AMOUNT="";
+			if (rsAmount.next()) {
+				AMOUNT = rsAmount.getString(1);
+			}
+			if (SPONSOR_BANK.equals(SPONS_BANK_IFSC)) {
+				PreparedStatement checkTredsLimit = conn.prepareStatement(checkTreds);
+				ResultSet rsTreds = checkTredsLimit.executeQuery();
+				String TredsLimit=null;
+				if(rsTreds.next()) {
+					TredsLimit = rsTreds.getString(1);
+				}
+				if (Double.parseDouble(TredsLimit) <= AMT_IN_FIGURES) {
+					TECHNI_STATUS = "01";
+					CBS_ERR_NO = "8884";
+				}
+			} else if (Double.parseDouble(AMOUNT) <= AMT_IN_FIGURES) {
+				TECHNI_STATUS = "01";
+				CBS_ERR_NO = "8884";
+			}
+
+//          Getting rejection code from ACHE  
+			if (TECHNI_STATUS.equals("01")) {
+				PreparedStatement getRejectionCode = conn.prepareStatement(fetchRejectionQuery);
+				getRejectionCode.setString(1, CBS_ERR_NO);
+				ResultSet rsRejectionCode = getRejectionCode.executeQuery();
+				if(rsRejectionCode.next()) {
+					REJECT_REASON = rsRejectionCode.getString(1);
+				}
+			}
+
+			PreparedStatement insertStmt = conn.prepareStatement(insertAchtSQL);
+			insertStmt.setString(1, "003");
+			insertStmt.setString(2, "C");
+			insertStmt.setString(3, ACCT_NO);
+			insertStmt.setString(4, UNQE_REF_NO);
+			insertStmt.setString(5, SPONS_BANK_IFSC);
+			insertStmt.setString(6, SPONS_BANK_MICR);
+			insertStmt.setString(7, UTILITY_CODE);
+			insertStmt.setString(8, "R");
+			insertStmt.setObject(9, MANDATE_REC_DATE);
+			insertStmt.setString(10, SERVICE_PROVIDER);
+			insertStmt.setString(11, ACCT_TYPE);
+			insertStmt.setString(12, "000");
+			insertStmt.setString(13, BRCH_CODE);
+			insertStmt.setString(14, DRAW_BANK_IFSC);
+			insertStmt.setString(15, DRAW_BANK_MICR);
+			insertStmt.setDouble(16, AMT_IN_FIGURES);
+			insertStmt.setString(17, " ");
+			insertStmt.setString(18, CONSUMER_REF_NO);
+			insertStmt.setString(19, SCHEME_REF_NO);
+			insertStmt.setString(20, FREQUENCY1);
+			insertStmt.setString(21, FREQUENCY2);
+			insertStmt.setString(22, VALIDITY_PERIOD);
+			insertStmt.setObject(23, FROM_DATE);
+			insertStmt.setObject(24, TO_DATE);
+			insertStmt.setString(25, CUST_NAME);
+			insertStmt.setString(26, CUSTOMER_ADD_ID);
+			insertStmt.setString(27, LANDLINE_NO);
+			insertStmt.setString(28, MOBILE_NO);
+			insertStmt.setString(29, EMAIL_ID);
+			insertStmt.setString(30, CATE_CODE);
+			insertStmt.setString(31, PROPRIETARY);
+			insertStmt.setString(32, " ");
+			insertStmt.setString(33, CNCL_REASON);
+			insertStmt.setString(34, REJECT_REASON);
+			insertStmt.setString(35, BRCH_NO);
+			insertStmt.setString(36, TECHNI_STATUS);
+			insertStmt.setObject(37, LocalDate.now()); //STATUS DATE
+			insertStmt.setString(38, BRCH_NO);
+			insertStmt.setString(39, ACH_UMRN);
+			insertStmt.setString(40, DCA_IDENTIFIER);
+			insertStmt.setString(41, ACH_SERL_NO);
+			insertStmt.setString(42, CBS_ERR_NO);
+			insertStmt.setString(43, SPNS_BANK_ID);
+			insertStmt.setString(44, SPNS_LOGN_ID);
+			insertStmt.setString(45, SPNS_UNIQ_REFNO);
+			insertStmt.setInt(46, Integer.parseInt(tellerId));
+			insertStmt.setString(47, AMT_DEBIT_TYPE);
+			insertStmt.setInt(48, 0);
+			insertStmt.setString(49, " ");
+			insertStmt.setString(50, " ");
+			insertStmt.setString(51, fileName);
+			insertStmt.setString(52, folderName);
+			insertStmt.setString(53, " ");
+			insertStmt.setString(54, immagename1);
+			insertStmt.setString(55, immagename2);
+			insertStmt.setString(56, "00");
+			int rowsAffected = insertStmt.executeUpdate();
+			log.info("Rows inserted: " + rowsAffected);
+			log.info("After reading file succesfully a new row added in data base for xml file: " + fileName);
+
+			if (conn != null)
+				conn.close();
+
+			if (TECHNI_STATUS.equals("00")) {
+				File[] files = dir.listFiles();
+				for (File file : files) {
+					if (file.getName().equals(fileName) || file.getName().equals(immagename1)
+							|| file.getName().equals(immagename2)) {
+						if (file.isFile()) {
+							File destinationFile = new File(destinationSuccessFolder, file.getName());
+							if (file.renameTo(destinationFile)) {
+								log.info("Moved file: " + file.getName());
+							} else {
+								log.info("Failed to move file: " + file.getName());
+							}
+						}
+					}
+				}
+			} else {
+				File[] files = dir.listFiles();
+				for (File file : files) {
+					if (file.getName().equals(fileName) || file.getName().equals(immagename1)
+							|| file.getName().equals(immagename2)) {
+						if (file.isFile()) {
+							File destinationFile = new File(destinationFailFolder, file.getName());
+							if (file.renameTo(destinationFile)) {
+								log.info("Moved file: " + file.getName());
+							} else {
+								log.info("Failed to move file: " + file.getName());
+							}
+						}
+					}
+				}
+			}
+		} catch (SQLException e) {
+			log.error("Sql exception , data can not stored in data base for file: " + fileName + " in folder: "
+					+ folderName + " " + e);
+		}
+	}
+}
+
+
+
+
+package com.sbi.tcs.pain_09.table_updation.main;
+
+//import javax.xml.bind.JAXBContext;
+//import javax.xml.bind.JAXBException;
+//import javax.xml.bind.Unmarshaller;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.JAXBException;
+import jakarta.xml.bind.Unmarshaller;
+
+import java.io.File;
+
+public class XML_READER {
+	private static final Logger log = LogManager.getLogger(XML_READER.class);
+	
+    public Pain_10_Document readXml10(File file) throws JAXBException {
+        
+        if(!file.exists()) {
+        	log.info("No file");
+        }
+        JAXBContext jaxbContext = JAXBContext.newInstance(Pain_10_Document.class);
+        Unmarshaller jaxbUnmarshaller = jaxbContext.createUnmarshaller();
+        Pain_10_Document document = (Pain_10_Document) jaxbUnmarshaller.unmarshal(file);
+        
+        // Debugging output
+        if (document != null) {
+            log.info("XML successfully unmarshalled for file name: "+file.getName());
+        } else {
+            log.info("Unmarshalling returned null for file name: "+file.getName());
+        }
+       
+        return document;
+    }
+    
+	public Pain_09_Document readXml9(File file) throws JAXBException {
+	        
+	        if(!file.exists()) {
+	        	log.info("No file");
+	        }
+	        Pain_09_Document document=null;
+	        
+	        	JAXBContext jaxbContext = JAXBContext.newInstance(Pain_09_Document.class);
+	        	Unmarshaller jaxbUnmarshaller = jaxbContext.createUnmarshaller();
+	        document = (Pain_09_Document) jaxbUnmarshaller.unmarshal(file);
+	        
+	        // Debugging output
+	        if (document != null) {
+	        	log.info("XML successfully unmarshalled for file name: "+file.getName());
+	        } else {
+	        	log.info("Unmarshalling returned null for file name: "+file.getName());
+	        }
+	       
+	        return document;
+	    }
+
+	public Pain_11_document readXml11(File file) throws JAXBException {
+	    
+	    if(!file.exists()) {
+	    	log.info("No file");
+	    }
+	    JAXBContext jaxbContext = JAXBContext.newInstance(Pain_11_document.class);
+	    Unmarshaller jaxbUnmarshaller = jaxbContext.createUnmarshaller();
+	    Pain_11_document document = (Pain_11_document) jaxbUnmarshaller.unmarshal(file);
+	    
+	    // Debugging output
+	    if (document != null) {
+	    	log.info("XML successfully unmarshalled for file name: "+file.getName());
+	    } else {
+	    	log.info("Unmarshalling returned null for file name: "+file.getName());
+	    }
+	   
+	    return document;
+	}
+}
+
+
+
+package com.sbi.tcs.pain10Util;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
+public class ExtractProp {
+    //private static final Logger logger = (Logger) LogManager.getLogger(ExtractProperties.class);
+    private static final String EXTRACT_PROPERTIES_FILE = "E:\\SAYAN new WORK\\PAIN_09_table_updation\\src\\com\\sbi\\tcs\\pain10Util\\Pain10.properties";
+//	private static final String EXTRACT_PROPERTIES_FILE = "/AadeshApp/JAR/PAIN_09_10_11_METADATA/PROPERTY_FILES/application.properties";
+    
+    private static ExtractProp instance = new ExtractProp();
+    private String propertyValue = null;
+    Properties extractProp = null;
+
+    private ExtractProp() {
+        loadProperties();
+    }
+
+    private void loadProperties() {
+        InputStream bisExtract = null;
+        try {
+            bisExtract = new FileInputStream(EXTRACT_PROPERTIES_FILE);
+            this.extractProp = new Properties();
+            this.extractProp.load(bisExtract);
+        } catch (FileNotFoundException e) {
+            //logger.error("Unable to load properties file: " + e.getMessage());
+        } catch (IOException e) {
+            //logger.error("Error occurred while loading properties file: " + e.getMessage());
+        } finally {
+            closeExtractProperty(bisExtract);
+        }
+    }
+    
+    public void closeExtractProperty(InputStream bisExtract) {
+        try {
+            if (bisExtract != null) {
+                bisExtract.close();
+            }
+        } catch (IOException e) {
+            //logger.error("Unable to close InputStream: " + e.getMessage());
+        }
+    }
+    
+    public String getExtractProperty(String key) {
+        this.propertyValue = this.extractProp.getProperty(key);
+        return this.propertyValue;
+    }
+
+    public int getExtractPropertyAsInt(String key) {
+        String value = this.extractProp.getProperty(key);
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            //logger.error("Error converting property value to int for key: " + key + ", value: " + value);
+            return 0; // or throw an exception based on your error handling strategy
+        }
+    }
+    
+    public static ExtractProp getInstance() {
+        return instance;
+    }
+}
+
+
+
+package com.sbi.tcs.pain10Util;
+
+import java.io.FileWriter;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+
+public class Pain10_sequence {
+    // Define 10^36 as the max limit (36 nines: 999...999)
+    private static final BigInteger MAX_SEQUENCE = new BigInteger("9".repeat(36));
+    private static final String SEQUENCE_FILE_PATH = ExtractProp.getInstance().getExtractProperty("Sequence_file_path");
+    private static final Logger log = LogManager.getLogger(Pain10_sequence.class);
+    public BigInteger getSequence() {
+        BigInteger sequenceNumber = readSequenceNumber();
+
+        // Ensure sequence number is within valid range
+        if (sequenceNumber.compareTo(MAX_SEQUENCE) > 0) {
+            sequenceNumber = BigInteger.ONE; // Reset to 1 after max
+        }
+
+        saveSequenceNumber(sequenceNumber.add(BigInteger.ONE));
+        return sequenceNumber;
+    }
+
+    private static BigInteger readSequenceNumber() {
+        try {
+            // Check if the sequence file exists
+            if (!Files.exists(Paths.get(SEQUENCE_FILE_PATH))) {
+                // Create file with initial value 1
+                saveSequenceNumber(BigInteger.ONE);
+                return BigInteger.ONE;
+            }
+
+            // Read current sequence number from file
+            String sequenceStr = new String(Files.readAllBytes(Paths.get(SEQUENCE_FILE_PATH))).trim();
+            return new BigInteger(sequenceStr);
+        } catch (IOException | NumberFormatException e) {
+            // Return default value on error
+            return BigInteger.ONE;
+        }
+    }
+
+    private static void saveSequenceNumber(BigInteger sequenceNumber) {
+        try (FileWriter writer = new FileWriter(SEQUENCE_FILE_PATH)) {
+            writer.write(sequenceNumber.toString());
+        } catch (IOException e) {
+        	log.info("can not save sequence");
+        }
+    }
+}   
+
+
+
+
+package com.sbi.tcs.pain10Util;
+
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Base64;
+import java.util.Date;
+import java.util.Properties;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+public class Utility {
+	private static final Logger logger = LogManager.getLogger(Utility.class.getName());
+
+	public static boolean isCurrentDate(String inputdate, String currentSysDate) {
+		if (inputdate.equalsIgnoreCase(currentSysDate)) {
+			return true;
+		}
+		return false;
+	}
+
+	public static String decimalValue(String amount) {
+		BigDecimal number = new BigDecimal(amount);
+		BigDecimal cn = number.divide(BigDecimal.valueOf(100));
+		String amtDecimal = cn.toString();
+		return amtDecimal;
+	}
+
+
+
+	public static String getDate(String strDate, String fromFormat, String toFormat) {
+
+		String start_dt = strDate;
+		DateFormat formatter = new SimpleDateFormat(fromFormat);
+		Date date = null;
+		try {
+			date = (Date) formatter.parse(start_dt);
+		} catch (ParseException e) {
+			logger.info("exception");
+		}
+		SimpleDateFormat newFormat = new SimpleDateFormat(toFormat);
+		String finalString = newFormat.format(date);
+		return finalString;
+	}
+
+//	public static String validateDate(String strDate, String regionDate) {
+//		if (strDate.trim().equals("")) {
+//			return null;
+//		} else {
+//			try {
+//				SimpleDateFormat sdfrmt = new SimpleDateFormat("dd/MM/yyyy");
+//				sdfrmt.setLenient(true);
+//				try {
+//					return null;
+//				} catch (RuntimeException e) {
+//					return null;
+//				}
+//
+//			} catch (IllegalArgumentException e) {
+//				return null;
+//			}
+//		}
+//	}
+
+	public static String validate(String thresholdDate, String fromDate, String toDate) {
+		try {
+			Date todate1 = new SimpleDateFormat("dd/MM/yyyy").parse(toDate);
+			Date fromdate1 = new SimpleDateFormat("dd/MM/yyyy").parse(fromDate);
+			Date thresholdDate2 = new SimpleDateFormat("dd/MM/yyyy").parse(thresholdDate);
+			int fDate = thresholdDate2.compareTo(fromdate1);
+			int tDate = thresholdDate2.compareTo(todate1);
+			if (fDate == -1 && tDate == -1) {
+				return "getFromNor";
+			}
+			if (fDate == 1 && tDate == 1) {
+				return "getFromArc";
+			} else {
+				return "fromBoth";
+			}
+		} catch (ParseException e) {
+			return "";
+		}
+	}
+
+	public String filterFlag(String input) {
+		if (input == null) {
+			return null;
+		}
+		String inputString = input;
+		String specialCharactersString = "!@#$%&*()'+,-.;<=>?[]^`{|}";
+		for (int i = 0; i < inputString.length(); i++) {
+			char ch = inputString.charAt(i);
+			if (inputString.contains("//")) {
+				return "";
+			}
+			if (specialCharactersString.contains(Character.toString(ch))) {
+
+				return "";
+			} else if (i == inputString.length() - 1) {
+			}
+		}
+		return input;
+	}
+
+	public static String removeSpace12(String str) {
+
+		String s = "";
+
+		String str1 = str.trim();
+		for (int i = 0; i < str1.length(); i++) {
+			if ((str1.charAt(i) == ' ') && ((str1.charAt(i + 1) == ' ') || (str1.charAt(i + 1) == '.'))) {
+				continue;
+			} else {
+				s = s + str1.charAt(i);
+			}
+		}
+		return s;
+	}
+
+	public static String removeLeadingZeros(String str) {
+		if (str == null) {
+			return null;
+		}
+		int index = 0;
+		while (index < str.length() && str.charAt(index) == '0') {
+			index++;
+		}
+		return index == str.length() ? "0" : str.substring(index);
+	}
+
+	public static String convertTo17Chars(String inputStr)
+			throws StringIndexOutOfBoundsException, IllegalArgumentException {
+		if (inputStr == null) {
+			return null;
+		}
+
+		String digitsOnly = null;
+//		try {
+			digitsOnly = removeLeadingZeros(inputStr.trim()) // returns "0" if inputStr contains all 0s
+					.replaceAll("\\D", ""); // removes all non-digit characters
+
+			if (digitsOnly.isEmpty() || digitsOnly.equals("0")) {
+				return null;
+			}
+//		} catch (Exception e) {
+//			return null;
+//		}
+
+		StringBuilder sb;
+		try {
+			if (digitsOnly.length() >= 17) {
+				digitsOnly = digitsOnly.substring(0, 11);
+			}
+
+			int padLength = 17 - digitsOnly.length();
+			sb = new StringBuilder(17);
+			for (int i = 0; i < padLength; i++) {
+				sb.append('0');
+			}
+		} catch (StringIndexOutOfBoundsException | IllegalArgumentException e) {
+			
+			return null;
+		}
+		sb.append(digitsOnly);
+		return sb.toString();
+	}
+	public static String aesDecrypt(String key, String initVector, String encrypted)
+			throws UnsupportedEncodingException {
+		byte[] keyb = keyToB(key);
+		byte[] ivb = keyToB(initVector);
+		String dec = decrypt1(keyb, ivb, encrypted);
+		return dec;
+	}
+	public static String decrypt1(byte[] key, byte[] initVector, String encrypted) {
+        try {
+           // IvParameterSpec iv = new IvParameterSpec(initVector);
+             SecretKeySpec skeySpec = new SecretKeySpec(key, "AES");
+           Security.addProvider(new BouncyCastleProvider());
+          GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(16 * 8, initVector);
+          // Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+           Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+          //  cipher.init(Cipher.DECRYPT_MODE, skeySpec, iv);
+            cipher.init(Cipher.DECRYPT_MODE, skeySpec, gcmParameterSpec);
+
+            byte[] original = cipher.doFinal(Base64.getDecoder().decode(encrypted));
+            byte[] notOriginal = new String (original).replaceAll("\0", "").getBytes();
+            return new String(notOriginal);
+        } catch (NoSuchAlgorithmException e) {
+			logger.error("Algorithm not found: {}", e);
+		} catch (NoSuchPaddingException e) {
+			logger.error("Padding not found: {}", e);
+		} catch (InvalidKeyException e) {
+			logger.error("Invalid key: {}", e);
+		} catch (InvalidAlgorithmParameterException e) {
+			logger.error("Invalid algorithm parameter: {}", e);
+		} catch (IllegalBlockSizeException e) {
+			logger.error("Illegal block size: {}", e);
+		} catch (BadPaddingException e) {
+			logger.error("Bad padding: {}", e);
+		} 
+
+        return null;
+    }
+	
+	public static byte[] keyToB(String key) throws UnsupportedEncodingException {
+
+		byte[] keybyte = Base64.getDecoder().decode(key.getBytes("UTF-8"));
+
+		return keybyte;
+	}
+}
+
+
+
+
+DB_URL=AopOKYFgLM2BSL7YcTXAkpMIFrxaeg7/m9+vtQs7c9pMLCIQEvXDGcQm2y+GbmgBHFXhsiAE0ltNtZo=
+USER=KY9IL8hnIuwcmPoFfGeX+WyRqFDpkA==
+PASS=KY9IL8hnIuwcmPoFfGeX+WyRqFDpkA==
+IV=AYEFyTcSaPmewXc+JPsGZA==
+Key=tIPr6vE4nRwzVHeIsApDO9N5Lo5lohB5XZTlirh1yvA=
+insertAchtSQL=INSERT INTO ACHT (INST_NO, ACTION, ACCT_NO, UNQE_REF_NO, SPONS_BANK_IFSC, SPONS_BANK_MICR, UTILITY_CODE, ORGN_SOURCE, MANDATE_REC_DATE, SERVICE_PROVIDER, ACCT_TYPE, CUST_BANK, BRCH_CODE, DRAW_BANK_IFSC, DRAW_BANK_MICR, AMT_IN_FIGURES, AMOUNT_WORDS, CONSUMER_REF_NO, SCHEME_REF_NO, FREQUENCY1, FREQUENCY2, VALIDITY_PERIOD, FROM_DATE, TO_DATE, CUST_NAME, CUSTOMER_ADD_ID, LANDLINE_NO, MOBILE_NO, EMAIL_ID, CATE_CODE, PROPRIETARY, AMND_REASON, CNCL_REASON, REJECT_REASON, TXN_BRCH_NO, TECHNI_STATUS, STATUS_DATE, CCPC_BRCH_NO, ACH_UMRN, DCA_IDENTIFR, ACH_SERL_NO, CBS_ERR_NO, SPNS_BANK_ID, SPNS_LOGN_ID, SPNS_UNIQ_REFNO, TELLER_ID, AMT_DEBIT_TYPE, MAKER_ID, CHECKER_ID, OUTPUT_FILE_NAME,INPUT_FILE_NAME,INPUT_FOLDER_NAME,OUTPUT_FOLDER_NAME,IMAGE_NAME_1,IMAGE_NAME_2,STATUS) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?)
+MAX_SEQUENCE=999999
+Sequence_file_path=E:\\SAYAN new WORK\\Pain_dest\\Pain10_sceuence
+WES=05076
+OTH=04234
+NOR=04328
+SOU=10395
+getDatafromACMM=Select * From ACMM where UMRN_NO=?
+checkACMMEntry=Select ACCT_NO,UMRN_STATUS from ACMM where INST_NO=? and UMRN_NO=?
+fetchACMMforCancel=select UMRN_STATUS, LAST_FILE_DATE, DEBIT_FILE_COUNT, FROM_DATE, UTILITY_CODE, SERVICE_PROVIDER, ACCT_TYPE, CUST_BANK, BRCH_CODE, AMT_IN_FIGURES, AMOUNT_WORDS, CONSUMER_REF_NO, SCHEME_REF_NO, FREQUENCY1, FREQUENCY2, VALIDITY_PERIOD, TO_DATE, CUST_NAME, CUSTOMER_ADD_ID, LANDLINE_NO, MOBILE_NO, EMAIL_ID, CATE_CODE, PROPRIETRY from ACMM where INST_NO=? and UMRN_NO=? and ACCT_NO=?
+AchtCheckForUMRN=Select count(*) from ACHT where INST_NO='003' and ACH_UMRN=? and ACTION='C' and ORGN_SOURCE='R' and TECHNI_STATUS!='99'
+insertACMH=INSERT INTO ACMH (INST_NO, UMRN_NO, ACCT_NO, UNQE_REF_NO, SPONS_BANK_IFSC, SPONS_BANK_MICR, UTILITY_CODE,MANDATE_REC_DATE, SERVICE_PROVIDER, ACCT_TYPE, CUST_BANK, BRCH_CODE, DRAW_BANK_IFSC,DRAW_BANK_MICR, AMT_IN_FIGURES, AMOUNT_WORDS, CONSUMER_REF_NO, SCHEME_REF_NO, FREQUENCY1, FREQUENCY2, VALIDITY_PERIOD, FROM_DATE, TO_DATE, CUST_NAME, CUSTOMER_ADD_ID, LANDLINE_NO, MOBILE_NO, EMAIL_ID, CATE_CODE, PROPRIETRY, AMND_REASON, CNCL_REASON, TXN_BRCH_NO, ORGN_SOURCE, DCA_IDENTIFR, UMRN_STATUS, STATUS_DATE, AMT_DEBIT_TYPE, MAN_CHR, DEBIT_FILE_COUNT, LAST_FILE_DATE, ACMH_TRN_TIME, ACMH_TRN_DATE) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+updateAcmmForCancel=Update ACMM set CNCL_REASON=?, STATUS_DATE=?, UMRN_STATUS=?, DCA_IDENTIFR=?, UNQE_REF_NO=?, SPONS_BANK_IFSC=?, SPONS_BANK_MICR=?, DRAW_BANK_IFSC=?, DRAW_BANK_MICR=? WHERE INST_NO=? and UMRN_NO=? and ACCT_NO=?
+insertLNFT=INSERT INTO MR_LNFT (ACCOUNT_NUMBER,ACH_UMRN,BRANCH_CODE,STATUS,TELLER_ID,REQUEST_REFERENCE_NO,AUTH_ID,TXN_DATE,ACTION) VALUES (?,?,?,?,?,?,?,?,?)
+checkSponserAllowCard=select SPONSOR_BANK from SPONSOR_ALLOW_CARD where UTILITY_CODE=?
+checkTreds=select LIMIT from TREDS_LIMIT_CARD
+checkAmount=select MANDATE_AMOUNT from AMOUNT1_CARD
+fetchRejectionQuery=select ACHE_REJECTION_CODE from ACHE where ACHE_ERROR_CODE=?
+tellerId=9991
+sourceFolderPath=E:\\SAYAN new WORK\\Pain_09_xmlFiles
+destinationFailFolderPathAmmend=E:\\SAYAN new WORK\\Pain_dest\\Pain_10_fail\\Ammend
+destinationFailFolderPathCreate=E:\\SAYAN new WORK\\Pain_dest\\Pain_10_fail\\Create
+destinationFailFolderPathCancel=E:\\SAYAN new WORK\\Pain_dest\\Pain_10_fail\\Cancel
+succesFolderPathforAmmend=E:\\SAYAN new WORK\\Pain_dest\\Pain_10_inbetween\\Ammend
+succesFolderPathforCreate=E:\\SAYAN new WORK\\Pain_dest\\Pain_10_inbetween\\Create
+succesFolderPathforCancel=E:\\SAYAN new WORK\\Pain_dest\\Pain_10_inbetween\\Cancel
+Logger_path=E:\\SAYAN new WORK\\LOGS\\
+Logger_FileName=PAIN_LOG
+Timer_Delay=10000
+Timer_Period=10000
+Pain_backup_path=E:\\SAYAN new WORK\\Pain_10_backup\\
