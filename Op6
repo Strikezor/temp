@@ -1,0 +1,114 @@
+# Technical Document
+PAIN 12 XML Generation Utility
+## Objective
+The PAIN 12 Utility automates the generation of PAIN.012.001.01 (Mandate Acceptance Report) XML files in response to previously processed mandate creation, amendment, and cancellation requests. It continuously polls the core database (ACHT table) for mandate records that have reached a terminal validation state (accepted or rejected), generates the corresponding ISO 20022 compliant XML acknowledgment, routes the file to the appropriate downstream directory based on the transaction type, and updates the database to mark the acknowledgment as generated.
+## Architecture
+The module utilizes a database-driven, scheduled polling architecture:
+ * **Launcher & Scheduler** – A java.util.Timer schedules a TimerTask (Helper) to execute at configured fixed intervals to poll the database.
+ * **Database Poller** – Executes selection queries to fetch records pending acknowledgment generation.
+ * **XML Generator** – Employs the Java DOM API (DocumentBuilderFactory, Transformer) to dynamically construct PAIN.012 XML structures, embedding original message details and acceptance/rejection flags.
+ * **File Router** – Determines the file path (Create, Amend, or Cancel) based on the database ACTION code and saves the formatted XML.
+ * **Database Updater** – Updates the transaction status and logs the output filename in the database to prevent duplicate generation.
+## Table Used (Validation & Status Mapping)
+The application interacts with the ACHT table to determine which records require an acknowledgment and to update their status post-generation.
+| Status and Error Fields | Meaning |
+|---|---|
+| **Input Condition** | Selects records where TECHNI_STATUS IN ('01', '03', '04') AND STATUS IN ('41', '42', '44', '46'). |
+| **TECHNI_STATUS = "01" or "03"** | Mandate was Rejected. The XML is generated with <Accptd>false</Accptd> and includes the rejection reason in <Prtry>. |
+| **TECHNI_STATUS = "04"** | Mandate was Accepted. The XML is generated with <Accptd>true</Accptd> and proprietary ID ac01. |
+| **Output Update** | Post-generation, the TECHNI_STATUS is updated to "05", marking the acknowledgment as successfully created. |
+## Classes
+### 1. MandateLauncher.java & Helper (TimerTask)
+The main entry point and execution scheduler for the PAIN 12 utility.
+**Responsibilities:**
+ * Initializes log4j2 logging using a system property (log4j2.props).
+ * Loads configuration variables and decrypted database credentials into static memory.
+ * Schedules the Helper task to run periodically using Timer_Delay and Timer_Period.
+ * The Helper class explicitly checks if records exist via fileExist() before instantiating Mandate_main to process the files.
+### 2. Mandate_main.java
+The core processing class responsible for data extraction, XML document creation, and database updates.
+**Responsibilities:**
+ * **Data Fetching:** Executes the Selection_Query to fetch a single pending record from ACHT, retrieving fields like ACTION, ACCT_NO, UNQE_REF_NO, TECHNI_STATUS, and SPONS_BANK_IFSC.
+ * **Bank Mapping:** Queries the ifsc table to resolve the Sponsor Bank's name using the SPONS_BANK_IFSC code.
+ * **XML Construction:** Constructs the PAIN.012 XML DOM tree. It builds nodes such as <MndtAccptncRpt>, <GrpHdr>, <InstgAgt>, and <InstdAgt>. It dynamically sets the <MsgNmId> to pain.009.001.01, pain.010.001.01, or pain.011.001.01 based on the ACTION flag (C, A, or D).
+ * **XML Transformation:** Writes the DOM to a physical file, enforcing UTF-8 encoding, omitting the default XML declaration, and manually prepending the exact XML header <?xml version="1.0" encoding="UTF-8"?>\n.
+ * **Database Updates:** Calls updateFileStatus to update TECHNI_STATUS to "05" and updateReturnFileName to persist the generated filename in the database.
+### 3. DecryptionUtilty.java
+A security helper class managing the decryption of application credentials.
+**Responsibilities:**
+ * Implements aesDecrypt and decrypt1 methods utilizing AES/GCM/NoPadding with the BouncyCastle provider to securely decrypt database URLs, usernames, and passwords at startup.
+### 4. ExtractProp.java
+A Singleton configuration manager.
+**Responsibilities:**
+ * Loads the application's external deployment properties from /AadeshApp/JAR/Pain12_Metadata/PropertyFiles/application.properties.
+ * Exposes getExtractProperty and getExtractPropertyAsInt to serve configuration values to the rest of the application.
+## File Movement and Routing Directory
+The PAIN 12 utility does not process existing files; instead, it generates new XML acknowledgment files and routes them directly to downstream encryption folders based on the transaction ACTION:
+ * **Create Acknowledgments (ACTION = 'C'):** Saved directly to the path defined by CREATE_FILE_PATH.
+ * **Amend Acknowledgments (ACTION = 'A'):** Saved directly to the path defined by AMEND_FILE_PATH.
+ * **Cancel Acknowledgments (ACTION != 'A' or 'C'):** Saved directly to the path defined by CANCEL_FILE_PATH.
+## Metadata and Configuration Details
+The utility relies on various metadata and parameters defined in the properties file to govern execution and formatting:
+**Execution Parameters**
+ * **Timer Delay (Timer_Delay):** 5000 milliseconds (5 seconds).
+ * **Timer Period (Timer_Period):** 10000 milliseconds (10 seconds).
+**File Naming Variables**
+ * **Process Name (PROCESS_NAME):** MMS.
+ * **Transaction Type (TRANS_TYPE):** ACCEPT.
+ * **Bank Identifier (BANK_IDENTIFIER):** SBIN.
+ * **Extra Suffix (EXTRA2):** INP.
+ * **Max Sequence (MAX_SEQUENCE):** 999999 (Used to format a 6-digit sequence number, resetting to 1 when exceeded).
+ * **Sequence File Path (SEQUENCE_FILE_PATH_CR):** /AadeshApp/JAR/Pain12_Metadata/File_sequence.txt.
+**Branch/Zone Extra Mapping**
+The branch code is mapped to specific zones to form part of the file name (e.g., 04791=WES, 04114=SOU, 04234=OTH, 00437=OTH).
+**File Destination Paths**
+ * **AMEND_FILE_PATH:** /AadeshApp/JAR/MandateEncryption/SourceFiles/AMEND/.
+ * **CREATE_FILE_PATH:** /AadeshApp/JAR/MandateEncryption/SourceFiles/CREATE/.
+ * **CANCEL_FILE_PATH:** /AadeshApp/JAR/MandateEncryption/SourceFiles/CANCEL/.
+## Database Queries
+Below are the parameterized SQL queries utilized by the PAIN 12 utility:
+ * **Selection_Query:**
+   Fetches the top pending record requiring acknowledgment generation.
+   Select ACTION,ACCT_NO,UNQE_REF_NO,TECHNI_STATUS,SPONS_BANK_IFSC,SPONS_BANK_MICR,DRAW_BANK_IFSC,DRAW_BANK_MICR,REJECT_REASON,ACH_UMRN,TXN_BRCH_NO From ACHT Where TECHNI_STATUS IN ('01', '03', '04') and STATUS IN ('41','42','44','46') Fetch First 1 rows only
+ * **Update_SQL:**
+   Updates the record's technical status after the XML is generated.
+   Update ACHT Set TECHNI_STATUS=?,STATUS_DATE=? Where ACTION=? AND ACCT_NO=? AND UNQE_REF_NO=?
+ * **Update_Query:**
+   Logs the output XML filename into the database record.
+   Update ACHT Set OUTPUT_FILE_NAME=? Where ACTION=? AND ACCT_NO=? AND UNQE_REF_NO=?
+ * **Select_IFSC:**
+   Resolves the Bank Name from the IFSC table.
+   Select BANK_NAME from ifsc where IFSC_CODE=?
+
+
+
+
+
+### Classes
+#### 1. MandateLauncher.java
+The main entry point and execution scheduler for the PAIN 12 XML Generation Utility.
+ * **Initialization:** Contains a static block that initializes the log4j2 logger by reading the log4j2.props system property.
+ * **Configuration Loading:** A second static block heavily utilizes the ExtractProp singleton to load all necessary configuration variables into static fields, including database credentials, SQL queries, timers, formatting rules, and designated file paths.
+ * **Execution:** The main method parses the Timer_Delay and Timer_Period configurations and sets up a java.util.Timer to schedule the Helper class (a TimerTask) to execute repeatedly at the configured intervals.
+#### 2. Helper.java (extends TimerTask)
+A scheduled worker task responsible for determining if processing should occur during the current timer tick.
+ * **Secure Credential Loading:** Features a static block that utilizes DecryptionUtilty.aesDecrypt to decrypt the database URL, username, and password into memory before executing any database operations.
+ * **Validation Check (fileExist):** Establishes a temporary database connection and executes the Selection_Query. If the ResultSet returns at least one row, it indicates there are pending records to process.
+ * **Triggering Processing:** The run() method calls fileExist(). If true, it instantiates the Mandate_main class and calls writer.processMandateFiles() to begin XML generation; otherwise, it logs that no records are available.
+#### 3. Mandate_main.java
+The core processing class where database retrieval, XML document construction, and database updates occur.
+ * **Data Extraction:** The processMandateFiles method executes the Selection_Query (fetching one row) to extract fields like ACTION, ACCT_NO, UNQE_REF_NO, TECHNI_STATUS, and SPONS_BANK_IFSC. It utilizes Log4j2's ThreadContext to inject these values into the logging context for traceability.
+ * **Bank Name Resolution:** Executes the Select_IFSC query (selectStmt2) to resolve the human-readable bank name using the extracted IFSC code.
+ * **Sequence & Filename Generation:** The returnFileName method coordinates with readSequenceNumber and saveSequenceNumber to manage a sequential counter stored in a physical text file (SEQUENCE_FILE_PATH_CR). It combines the process name, bank identifier, zone suffix, date, and sequence number to form the final XML filename.
+ * **XML Construction:** The xmlCreation method uses the Java DOM API (DocumentBuilderFactory, DocumentBuilder) to build the ISO 20022 compliant PAIN.012 XML tree. It dynamically structures nodes (GrpHdr, InstgAgt, InstdAgt, OrgnlMsgInf) and evaluates the Status to populate the <Accptd> (true/false) and <Prtry> tags.
+ * **XML Transformation & Writing:** Uses a Transformer to convert the DOM object into a physical file, ensuring it is written to the correct downstream directory (AMEND_FILE_PATH, CREATE_FILE_PATH, or CANCEL_FILE_PATH) based on the ACTION flag. It manually writes the XML header to ensure exact compliance before streaming the DOM.
+ * **Database Updates:** Executes updateFileStatus (setting TECHNI_STATUS to '05') and updateReturnFileName (saving the generated filename) to mark the transaction as successfully acknowledged and prevent duplicate generation.
+#### 4. DecryptionUtilty.java
+A cryptographic utility class dedicated to securing application credentials.
+ * **Decryption Engine:** Implements the decrypt1 method using the Cipher class configured for AES/GCM/NoPadding with the BouncyCastleProvider.
+ * **Data Conversion:** Provides the aesDecrypt and keyToB wrapper methods to handle Base64 decoding of the encrypted strings, initialization vectors (IVs), and secret keys before passing them to the core decryption engine.
+#### 5. ExtractProp.java
+A Singleton configuration manager that reads deployment properties from the file system.
+ * **Initialization:** Automatically reads the application.properties file located at /AadeshApp/JAR/Pain12_Metadata/PropertyFiles/ via a FileInputStream into a java.util.Properties object during initialization.
+ * **Access Methods:** Provides the getExtractProperty(String key) method for retrieving string-based configurations and getExtractPropertyAsInt(String key) for parsing numeric configurations, implementing safe error handling for missing or malformed keys.
+
