@@ -1,0 +1,975 @@
+package com.tcs.MandateLauncher;
+
+import java.io.UnsupportedEncodingException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Objects;
+import java.util.Timer;
+import java.util.TimerTask;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.Configurator;
+
+import com.tcs.Mandate.Mandate_main;
+import com.tcs.Mandate.utils.DecryptionUtilty;
+import com.tcs.Mandate.utils.ExtractProp;
+
+class Helper extends TimerTask {
+	private static Logger logger = LogManager.getLogger(Helper.class.getName());
+
+	private static String DB_URL=null;
+	private static String USER = null;
+	private static String PASS = null;
+	static {
+		
+		try {
+			DB_URL = DecryptionUtilty.aesDecrypt(MandateLauncher.getDbUrl(),MandateLauncher.getKey(),MandateLauncher.getIv());
+			USER = DecryptionUtilty.aesDecrypt(MandateLauncher.getUser(),MandateLauncher.getKey(),MandateLauncher.getIv());
+			PASS = DecryptionUtilty.aesDecrypt(MandateLauncher.getPass(),MandateLauncher.getKey(),MandateLauncher.getIv());
+		} catch(UnsupportedEncodingException e) {
+			logger.info("UnsupportedEncodingException in getting db details");
+		}
+	}
+	String Selection_Query = MandateLauncher.getSelectionQuery();
+//    private static final String USER =  ExtractProp.getInstance().getExtractProperty("USER");
+//	  private static final String DB_URL = ExtractProp.getInstance().getExtractProperty("DB_URL"); 
+//    private static final String PASS =  ExtractProp.getInstance().getExtractProperty("PASS");
+//    private static final String Selection_Query = ExtractProp.getInstance().getExtractProperty("Selection_Query");
+
+	@Override
+	public void run() {
+		logger.info("Helper class started...");
+		Mandate_main writer = new Mandate_main();
+		if (fileExist()) {
+			try {
+				writer.processMandateFiles();
+				logger.info("File processed successfully");
+			} catch (Exception e) {
+				logger.error("Exception in processing files");
+			}
+		} else {
+			logger.info("No records to process");
+		}
+	}
+
+	public boolean fileExist() {
+		try (Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+				PreparedStatement selectStmt = conn.prepareStatement(Selection_Query);
+				ResultSet rs = selectStmt.executeQuery();) {
+
+			if (rs.next()) {
+				return true;
+			} else {
+				return false;
+			}
+		} catch (SQLException e) {
+			logger.error("SQL EXCEPTION in finding file from DB");
+		}
+		return false;
+	}
+}
+
+public class MandateLauncher {
+	private static Logger logger = LogManager.getLogger(MandateLauncher.class.getName());
+
+	static {
+		try {
+			String log4j2PropsPath = System.getProperty("log4j2.props"); // LOCAL
+			Objects.requireNonNull(log4j2PropsPath, "log4j2.props system property must be set"); // LOCAL
+			Configurator.initialize(null, log4j2PropsPath); // LOCAL
+		} catch (NullPointerException | IllegalArgumentException e) {
+			logger.error("Configuration error: " + e.getMessage());
+		} catch (Exception e) {
+			logger.error("Permission denied: " + e.getMessage());
+		}
+	}
+
+	private static String dbUrl;
+	private static String user;
+	private static String pass;
+	private static String selectionQuery;
+	private static String sequenceFilePath;
+	private static int maxSequence;
+	private static String processName;
+	private static String transType;
+	private static String bankIdentifier;
+	private static String extra2;
+	private static String updateSQL;
+	private static String updateQuery;
+	private static String dateFormat;
+	private static String amendFilePath;
+	private static String createFilePath;
+	private static String cancelFilePath;
+	private static String loggerPath;
+	private static String loggerName;
+	private static String timerDelay;
+	private static String timerPeriod;
+	private static String ifsc_code;
+	private static String key;
+	private static String iv;
+	
+	public static String getDbUrl() {
+		return dbUrl;
+	}
+
+	public static void setDbUrl(String dbUrl) {
+		MandateLauncher.dbUrl = dbUrl;
+	}
+
+	public static String getUser() {
+		return user;
+	}
+
+	public static void setUser(String user) {
+		MandateLauncher.user = user;
+	}
+
+	public static String getPass() {
+		return pass;
+	}
+
+	public static void setPass(String pass) {
+		MandateLauncher.pass = pass;
+	}
+
+	public static String getSelectionQuery() {
+		return selectionQuery;
+	}
+
+	public static void setSelectionQuery(String selectionQuery) {
+		MandateLauncher.selectionQuery = selectionQuery;
+	}
+
+	public static String getSequenceFilePath() {
+		return sequenceFilePath;
+	}
+
+	public static void setSequenceFilePath(String sequenceFilePath) {
+		MandateLauncher.sequenceFilePath = sequenceFilePath;
+	}
+
+	public static int getMaxSequence() {
+		return maxSequence;
+	}
+
+	public static void setMaxSequence(int maxSequence) {
+		MandateLauncher.maxSequence = maxSequence;
+	}
+
+	public static String getProcessName() {
+		return processName;
+	}
+
+	public static void setProcessName(String processName) {
+		MandateLauncher.processName = processName;
+	}
+
+	public static String getTransType() {
+		return transType;
+	}
+
+	public static void setTransType(String transType) {
+		MandateLauncher.transType = transType;
+	}
+
+	public static String getBankIdentifier() {
+		return bankIdentifier;
+	}
+
+	public static void setBankIdentifier(String bankIdentifier) {
+		MandateLauncher.bankIdentifier = bankIdentifier;
+	}
+
+	public static String getExtra2() {
+		return extra2;
+	}
+
+	public static void setExtra2(String extra2) {
+		MandateLauncher.extra2 = extra2;
+	}
+
+	public static String getUpdateSQL() {
+		return updateSQL;
+	}
+
+	public static void setUpdateSQL(String updateSQL) {
+		MandateLauncher.updateSQL = updateSQL;
+	}
+
+	public static String getUpdateQuery() {
+		return updateQuery;
+	}
+
+	public static void setUpdateQuery(String updateQuery) {
+		MandateLauncher.updateQuery = updateQuery;
+	}
+
+	public static String getDateFormat() {
+		return dateFormat;
+	}
+
+	public static void setDateFormat(String dateFormat) {
+		MandateLauncher.dateFormat = dateFormat;
+	}
+
+	public static String getAmendFilePath() {
+		return amendFilePath;
+	}
+
+	public static void setAmendFilePath(String amendFilePath) {
+		MandateLauncher.amendFilePath = amendFilePath;
+	}
+
+	public static String getCreateFilePath() {
+		return createFilePath;
+	}
+
+	public static void setCreateFilePath(String createFilePath) {
+		MandateLauncher.createFilePath = createFilePath;
+	}
+
+	public static String getCancelFilePath() {
+		return cancelFilePath;
+	}
+
+	public static void setCancelFilePath(String cancelFilePath) {
+		MandateLauncher.cancelFilePath = cancelFilePath;
+	}
+
+	public static String getLoggerPath() {
+		return loggerPath;
+	}
+
+	public static void setLoggerPath(String loggerPath) {
+		MandateLauncher.loggerPath = loggerPath;
+	}
+
+	public static String getLoggerName() {
+		return loggerName;
+	}
+
+	public static void setLoggerName(String loggerName) {
+		MandateLauncher.loggerName = loggerName;
+	}
+
+	public static String getTimerDelay() {
+		return timerDelay;
+	}
+
+	public static void setTimerDelay(String timerDelay) {
+		MandateLauncher.timerDelay = timerDelay;
+	}
+
+	public static String getTimerPeriod() {
+		return timerPeriod;
+	}
+
+	public static void setTimerPeriod(String timerPeriod) {
+		MandateLauncher.timerPeriod = timerPeriod;
+	}
+
+	public static Logger getLog() {
+		return logger;
+	}
+
+	public static void setLog(Logger logger) {
+		MandateLauncher.logger = logger;
+	}
+
+	public static String getIfsc_code() {
+		return ifsc_code;
+	}
+
+	public static void setIfsc_code(String ifsc_code) {
+		MandateLauncher.ifsc_code = ifsc_code;
+	}
+
+	public static String getKey() {
+		return key;
+	}
+
+	public static void setKey(String key) {
+		MandateLauncher.key = key;
+	}
+
+	public static String getIv() {
+		return iv;
+	}
+
+	public static void setIv(String iv) {
+		MandateLauncher.iv = iv;
+	}
+
+
+
+	static {
+		iv = ExtractProp.getInstance().getExtractProperty("IV");
+		key = ExtractProp.getInstance().getExtractProperty("Key");
+		timerDelay = ExtractProp.getInstance().getExtractProperty("Timer_Delay");
+		timerPeriod = ExtractProp.getInstance().getExtractProperty("Timer_Period");
+		dbUrl = ExtractProp.getInstance().getExtractProperty("DB_URL");
+		user = ExtractProp.getInstance().getExtractProperty("USER");
+		pass = ExtractProp.getInstance().getExtractProperty("PASS");
+		selectionQuery = ExtractProp.getInstance().getExtractProperty("Selection_Query");
+		sequenceFilePath = ExtractProp.getInstance().getExtractProperty("SEQUENCE_FILE_PATH_CR");
+		maxSequence = ExtractProp.getInstance().getExtractPropertyAsInt("MAX_SEQUENCE");
+		processName = ExtractProp.getInstance().getExtractProperty("PROCESS_NAME");
+		transType = ExtractProp.getInstance().getExtractProperty("TRANS_TYPE");
+		bankIdentifier = ExtractProp.getInstance().getExtractProperty("BANK_IDENTIFIER");
+		extra2 = ExtractProp.getInstance().getExtractProperty("EXTRA2");
+		updateSQL = ExtractProp.getInstance().getExtractProperty("Update_SQL");
+		updateQuery = ExtractProp.getInstance().getExtractProperty("Update_Query");
+		dateFormat = ExtractProp.getInstance().getExtractProperty("DATE_FORMAT");
+		amendFilePath = ExtractProp.getInstance().getExtractProperty("AMEND_FILE_PATH");
+		createFilePath = ExtractProp.getInstance().getExtractProperty("CREATE_FILE_PATH");
+		cancelFilePath = ExtractProp.getInstance().getExtractProperty("CANCEL_FILE_PATH");
+		ifsc_code = ExtractProp.getInstance().getExtractProperty("Select_IFSC");
+	}
+
+	public static void main(String[] args) {
+		logger.info("Application started...");
+
+		long Delay = Long.parseLong(timerDelay);
+		long Period = Long.parseLong(timerPeriod);
+		Timer timer = new Timer();
+		TimerTask task = new Helper();
+		timer.schedule(task, Delay, Period);
+	}
+}
+
+
+
+
+package com.tcs.Mandate;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.UnsupportedEncodingException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+
+import com.tcs.Mandate.utils.DecryptionUtilty;
+import com.tcs.Mandate.utils.ExtractProp;
+import com.tcs.MandateLauncher.MandateLauncher;
+
+public class Mandate_main {
+
+	private static final Logger logger = LogManager.getLogger(Mandate_main.class.getName());
+	private static String DB_URL=null;
+	private static String USER = null;
+	private static String PASS = null;
+	static {
+		
+		try {
+			DB_URL = DecryptionUtilty.aesDecrypt(MandateLauncher.getDbUrl(),MandateLauncher.getKey(),MandateLauncher.getIv());
+			USER = DecryptionUtilty.aesDecrypt(MandateLauncher.getUser(),MandateLauncher.getKey(),MandateLauncher.getIv());
+			PASS = DecryptionUtilty.aesDecrypt(MandateLauncher.getPass(),MandateLauncher.getKey(),MandateLauncher.getIv());
+		} catch(UnsupportedEncodingException e) {
+			logger.info("UnsupportedEncodingException in getting db details");
+		}
+	}
+	private static final String Selection_Query = MandateLauncher.getSelectionQuery();
+	private static final String SEQUENCE_FILE_PATH_CR = MandateLauncher.getSequenceFilePath();
+	private static final int MAX_SEQUENCE = MandateLauncher.getMaxSequence();
+	private static final String PROCESS_NAME = MandateLauncher.getProcessName();
+	private static final String TRANS_TYPE = MandateLauncher.getTransType();
+	private static final String BANK_IDENTIFIER = MandateLauncher.getBankIdentifier();
+
+	private static final String EXTRA2 = MandateLauncher.getExtra2();
+	private static final String Update_SQL = MandateLauncher.getUpdateSQL();
+	private static final String Update_Querey = MandateLauncher.getUpdateQuery();
+	private static final String DATE_FORMAT = MandateLauncher.getDateFormat();
+	private static final String AMEND_FILE_PATH = MandateLauncher.getAmendFilePath();
+	private static final String CREATE_FILE_PATH = MandateLauncher.getCreateFilePath();
+	private static final String CANCEL_FILE_PATH = MandateLauncher.getCancelFilePath();
+	private static final String IFSC_code = MandateLauncher.getIfsc_code();
+
+	SimpleDateFormat sdf = new SimpleDateFormat(DATE_FORMAT);
+
+	public void processMandateFiles() throws Exception {
+		logger.info("Finding files with status [03] or [04]...");
+		Connection conn = null;
+		PreparedStatement selectStmt = null;
+		PreparedStatement selectStmt2 = null;
+		PreparedStatement updateStmt = null;
+		ResultSet rs = null;
+		ResultSet rs2 = null;
+		try {
+			conn = DriverManager.getConnection(DB_URL, USER, PASS);
+			selectStmt = conn.prepareStatement(Selection_Query);
+			rs = selectStmt.executeQuery();
+
+			if (conn != null) {
+				logger.info("Database connection established successfully.");
+			}
+
+			// Ensure we are processing the result set correctly
+			if (rs.next()) {
+				String Action = rs.getString("ACTION");
+				String Acct_No = rs.getString("ACCT_NO");//
+				String Unqe_Ref_No = rs.getString("UNQE_REF_NO");
+				String spn_unqe_ref = rs.getString("SPNS_UNIQ_REFNO");
+				String Status = rs.getString("TECHNI_STATUS");
+				String SPONS_BANK_ifsc = rs.getString("SPONS_BANK_IFSC");
+				String SPONS_BANK_micr = rs.getString("SPONS_BANK_MICR");
+				String DRAW_BANK_ifsc = rs.getString("DRAW_BANK_IFSC");
+				String DRAW_BANK_micr = rs.getString("DRAW_BANK_MICR");
+				String Rej_Reason = rs.getString("REJECT_REASON");//
+				String Umrn = rs.getString("ACH_UMRN");
+				String BRCH_CODE = rs.getString("TXN_BRCH_NO");//
+
+				ThreadContext.put("ACTION", "ACTION: " + Action);
+				ThreadContext.put("ACCT_NO", "ACCT_NO: " + Acct_No);
+				ThreadContext.put("UNQE_REF_NO", "UNQE_REF_NO: " + Unqe_Ref_No);
+				ThreadContext.put("TECHNI_STATUS", "TECHNI_STATUS: " + Status);
+				ThreadContext.put("SPONS_BANK_IFSC", "SPONS_BANK_IFSC: " + SPONS_BANK_ifsc);
+				ThreadContext.put("DRAW_BANK_IFSC", "DRAW_BANK_IFSC: " + DRAW_BANK_ifsc);
+				ThreadContext.put("REJECT_REASON", "REJECT_REASON: " + Rej_Reason);
+				ThreadContext.put("Umrn", "Umrn: " + Umrn);
+				ThreadContext.put("BRCH_CODE", "BRCH_CODE: " + BRCH_CODE);
+				logger.info("Xml creation for mandate Strated of Action: " + Action + " And of Acct_No: " + Acct_No
+						+ " And of Unique_ref_no: " + Unqe_Ref_No);
+				String ifsc_bank = "";
+				if (SPONS_BANK_ifsc != null && !SPONS_BANK_ifsc.equals("") && !SPONS_BANK_ifsc.equals(" ")) {
+					selectStmt2 = conn.prepareStatement(IFSC_code);
+					selectStmt2.setString(1, SPONS_BANK_ifsc);
+					rs2 = selectStmt2.executeQuery();
+
+					if (rs2.next()) {
+						ifsc_bank = rs2.getString("BANK_NAME");
+					}
+				}
+				writeMandateFiles(Action, Acct_No, Unqe_Ref_No, Status, SPONS_BANK_ifsc, DRAW_BANK_ifsc, Rej_Reason,
+						Umrn, BRCH_CODE, SPONS_BANK_micr, DRAW_BANK_micr, ifsc_bank,spn_unqe_ref);
+
+			} else {
+				logger.warn("No records found with TECHNI_STATUS 04 or 03");
+			}
+			conn.close();
+
+		} catch (Exception e) {
+			logger.error("SQL Exception in processing Mandate files" + e);
+		} finally {
+			try {
+				if (rs != null)
+					rs.close();
+				if (selectStmt != null)
+					selectStmt.close();
+				if (updateStmt != null)
+					updateStmt.close();
+				if (conn != null)
+					conn.close();
+			} catch (SQLException e) {
+				logger.error("SQL Exception in closing the connection");
+				ThreadContext.clearAll();
+			}
+		}
+	}
+
+	public void writeMandateFiles(String Action, String Acct_No, String Unqe_Ref_No, String Status,
+			String SPONS_BANK_ifsc, String DRAW_BANK_ifsc, String Rej_Reason, String Umrn, String BRCH_CODE,
+			String SPONS_BANK_micr, String DRAW_BANK_micr, String ifsc_bank,String spn_unqe_ref) throws Exception {
+		logger.info("XML creation strated");
+		String filename = returnFileName(DRAW_BANK_ifsc, BRCH_CODE);
+		xmlCreation(filename, spn_unqe_ref, Action, Acct_No, Status, SPONS_BANK_ifsc, DRAW_BANK_ifsc, Rej_Reason, Umrn,
+				SPONS_BANK_micr, DRAW_BANK_micr, ifsc_bank);
+//		logger.info("Return 4");
+		String s = "05";
+		updateFileStatus(s, Action, Acct_No, Unqe_Ref_No);
+		updateReturnFileName(filename, Action, Acct_No, Unqe_Ref_No);
+	}
+
+	public void updateFileStatus(String status, String Action, String Acct_No, String Unqe_Ref_No) throws Exception {
+		logger.info("Status updation strated");
+		try (Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+				PreparedStatement updateStmt = conn.prepareStatement(Update_SQL)) {
+
+			updateStmt.setString(1, status);
+//	            updateStmt.setString(2, sdf.format(new Date()));
+			updateStmt.setObject(2, LocalDate.now());
+			updateStmt.setString(3, Action);
+			updateStmt.setString(4, Acct_No);
+			updateStmt.setString(5, Unqe_Ref_No); // Set the ID for the WHERE clause
+
+			updateStmt.executeUpdate();
+			logger.info("File status updated");
+		} catch (Exception e) {
+			// Handle SQL exceptions
+			logger.error("SQLException in updating file status");
+			throw e; // Rethrow the exception after logging
+		}
+
+	}
+
+	public void updateReturnFileName(String filename, String Action, String Acct_No, String Unqe_Ref_No)
+			throws Exception {
+		logger.info("ReturnFileName updation strated");
+		try (Connection conn = DriverManager.getConnection(DB_URL, USER, PASS);
+				PreparedStatement updateStmt = conn.prepareStatement(Update_Querey)) {
+
+			updateStmt.setString(1, filename);
+			updateStmt.setString(2, Action);
+			updateStmt.setString(3, Acct_No);
+			updateStmt.setString(4, Unqe_Ref_No); // Set the ID for the WHERE clause
+
+			updateStmt.executeUpdate();
+			logger.info("ReturnFileName updated");
+		} catch (Exception e) {
+			// Handle SQL exceptions
+			logger.error("SQLException in updating file status");
+			throw e; // Rethrow the exception after logging
+		}
+
+	}
+
+	public static String returnFileName(String DRAW_BANK_ifsc, String BRCH_CODE) throws Exception {
+		logger.info("Return XML file name generation strated");
+		int sequenceNumber = readSequenceNumber();
+
+		// Ensure sequence number is within the valid range
+		if (sequenceNumber > MAX_SEQUENCE) {
+			sequenceNumber = 1; // Reset to 1 after reaching the maximum value
+		}
+
+//		String prefix = DRAW_BANK_ifsc != null && DRAW_BANK_ifsc.length() >= 4 ? DRAW_BANK_ifsc.substring(0, 4)
+//				: DRAW_BANK_ifsc;
+
+		String LOGIN_ID = ExtractProp.getInstance().getExtractProperty("SBIN");
+
+		String EXTRA = ExtractProp.getInstance().getExtractProperty(BRCH_CODE) != null
+				? ExtractProp.getInstance().getExtractProperty(BRCH_CODE)
+				: "";
+
+//		if (DRAW_BANK_ifsc == null || DRAW_BANK_ifsc.trim().isEmpty()) {
+//			LOGIN_ID = "";
+//		}
+
+		// Format the current date as ddMMyyyy
+		String currentDate = new SimpleDateFormat("ddMMyyyy").format(new Date());
+
+		// Format the sequence number to a 6-digit number with leading zeros
+		String sequence = String.format("%06d", sequenceNumber);
+
+		// Generate the filename according to the specified format
+		String fileName = String.format("%s-%s-%s-%s-%s-%s-%s-%s", PROCESS_NAME, TRANS_TYPE, BANK_IDENTIFIER, EXTRA,
+				LOGIN_ID, currentDate, sequence, EXTRA2);
+
+		saveSequenceNumber(sequenceNumber + 1);
+//		logger.info("Return 1");
+		return fileName;
+	}
+
+	// Method to read the sequence number from the file
+	private static int readSequenceNumber() {
+		try {
+			// Check if the sequence file exists
+			File sequenceFile = new File(SEQUENCE_FILE_PATH_CR);
+
+
+			if (!sequenceFile.exists()) {
+				// If the file doesn't exist, create it with an initial sequence number of 1
+				saveSequenceNumber(1);
+				return 1;
+			}
+			// Read the sequence number from the file
+			String sequenceStr = new String(Files.readAllBytes(Paths.get(SEQUENCE_FILE_PATH_CR))).trim();
+
+			Integer res = null;
+			try {
+				res = Integer.parseInt(sequenceStr);
+			} catch (NumberFormatException e) {
+				// TODO Auto-generated catch block
+				logger.info("NumberFormatException in readSequenceNumber");
+			}
+			return res;
+		} catch (Exception e) {
+			logger.info("Exception in readSequenceNumber");
+			// In case of any error, return 1 as the default sequence number
+			return 1;
+		}
+	}
+
+	// Method to save the updated sequence number to the file
+	private static void saveSequenceNumber(int sequenceNumber) {
+		try (FileWriter writer = new FileWriter(SEQUENCE_FILE_PATH_CR)) {
+			writer.write(String.valueOf(sequenceNumber));
+		} catch (Exception e) {
+			logger.info("Exception in saveSequenceNumber");
+		}
+	}
+
+	public void xmlCreation(String fileName, String Unqe_Ref_No, String Action, String Acct_No, String Status,
+			String SPONS_BANK_ifsc, String DRAW_BANK_ifsc, String Rej_Reason, String Umrn, String SPONS_BANK_micr,
+			String DRAW_BANK_micr, String ifsc_bank) throws Exception {
+		try {
+			// Create a DocumentBuilderFactory
+			LocalDate myObj1 = LocalDate.now();
+			LocalTime myObj2 = LocalTime.now();
+			DateTimeFormatter myFormatObj = DateTimeFormatter.ofPattern("HH:mm:ss");
+			String formattedDate = myObj2.format(myFormatObj);
+			DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+			DocumentBuilder builder = factory.newDocumentBuilder();
+//			logger.info("Return 2");
+			// Create a new Document
+			Document document = builder.newDocument();
+
+			// Create root element
+			Element root = document.createElement("Document");
+			root.setAttribute("xmlns", "urn:iso:std:iso:20022:tech:xsd:pain.012.001.01");
+			document.appendChild(root);
+
+			// Create MndtAccptncRpt element
+			Element mndtAccptncRpt = document.createElement("MndtAccptncRpt");
+			root.appendChild(mndtAccptncRpt);
+
+			// Create GrpHdr element
+			Element grpHdr = document.createElement("GrpHdr");
+			mndtAccptncRpt.appendChild(grpHdr);
+
+			// Add MsgId and CreDtTm to GrpHdr
+			Element msgId = document.createElement("MsgId");
+			msgId.appendChild(document.createTextNode(Unqe_Ref_No));
+			grpHdr.appendChild(msgId);
+
+			Element creDtTm = document.createElement("CreDtTm");
+			creDtTm.appendChild(document.createTextNode(myObj1 + "T" + formattedDate));
+			grpHdr.appendChild(creDtTm);
+
+			// Create InstgAgt element
+			Element instgAgt = document.createElement("InstgAgt");
+			grpHdr.appendChild(instgAgt);
+			Element finInstnId1 = document.createElement("FinInstnId");
+			instgAgt.appendChild(finInstnId1);
+			Element clrSysMmbId1 = document.createElement("ClrSysMmbId");
+			finInstnId1.appendChild(clrSysMmbId1);
+			Element mmbId1 = document.createElement("MmbId");
+			if (DRAW_BANK_ifsc != null && !DRAW_BANK_ifsc.equals("") && !DRAW_BANK_ifsc.equals(" ")) {
+				mmbId1.appendChild(document.createTextNode(DRAW_BANK_ifsc));
+			} else {
+				mmbId1.appendChild(document.createTextNode(DRAW_BANK_micr));
+			}
+			clrSysMmbId1.appendChild(mmbId1);
+			Element nm1 = document.createElement("Nm");
+			nm1.appendChild(document.createTextNode("STATE BANK OF INDIA "));
+			finInstnId1.appendChild(nm1);
+
+			// Create InstdAgt element
+			Element instdAgt = document.createElement("InstdAgt");
+			grpHdr.appendChild(instdAgt);
+			Element finInstnId2 = document.createElement("FinInstnId");
+			instdAgt.appendChild(finInstnId2);
+			Element clrSysMmbId2 = document.createElement("ClrSysMmbId");
+			finInstnId2.appendChild(clrSysMmbId2);
+			Element mmbId2 = document.createElement("MmbId");
+			if (SPONS_BANK_ifsc != null && !SPONS_BANK_ifsc.equals("") && !SPONS_BANK_ifsc.equals(" ")) {
+				mmbId2.appendChild(document.createTextNode(SPONS_BANK_ifsc));
+
+				Element nm2 = document.createElement("Nm");
+				nm2.appendChild(document.createTextNode(ifsc_bank));
+				finInstnId2.appendChild(nm2);
+				clrSysMmbId2.appendChild(mmbId2);
+			} else {
+				mmbId2.appendChild(document.createTextNode(SPONS_BANK_micr));
+				clrSysMmbId2.appendChild(mmbId2);
+			}
+//			clrSysMmbId2.appendChild(mmbId2);
+//			Element nm2 = document.createElement("Nm");
+//			String ifsc = SPONS_BANK_ifsc.substring(0, 4);
+//			if (ifsc.equals("SBIN")) {
+//
+//			} else {
+//
+//			}
+
+			// Create UndrlygAccptncDtls element
+			Element undrlygAccptncDtls = document.createElement("UndrlygAccptncDtls");
+			mndtAccptncRpt.appendChild(undrlygAccptncDtls);
+
+			// Create OrgnlMsgInf element
+			Element orgnlMsgInf = document.createElement("OrgnlMsgInf");
+			undrlygAccptncDtls.appendChild(orgnlMsgInf);
+			Element msgId2 = document.createElement("MsgId");
+			msgId2.appendChild(document.createTextNode(Unqe_Ref_No));
+			orgnlMsgInf.appendChild(msgId2);
+			Element msgNmId = document.createElement("MsgNmId");
+			String painid;
+			if (Action.equals("A")) {
+				painid = "010";
+			} else if (Action.equals("C")) {
+				painid = "009";
+			} else {
+				painid = "011";
+			}
+			msgNmId.appendChild(document.createTextNode("pain." + painid + ".001.01"));
+			orgnlMsgInf.appendChild(msgNmId);
+			Element creDtTm2 = document.createElement("CreDtTm");
+			creDtTm2.appendChild(document.createTextNode(myObj1 + "T" + formattedDate));
+			orgnlMsgInf.appendChild(creDtTm2);
+
+			// Create AccptncRslt element
+			Element accptncRslt = document.createElement("AccptncRslt");
+			undrlygAccptncDtls.appendChild(accptncRslt);
+			Element accptd = document.createElement("Accptd");
+			String AcceptId = null;
+			String PrtryId = null;
+			if (Status.equals("03") || Status.equals("01")) {
+				AcceptId = "false";
+				PrtryId = Rej_Reason;
+			} else if (Status.equals("04")) {
+				AcceptId = "true";
+				PrtryId = "ac01";
+			}
+			accptd.appendChild(document.createTextNode(AcceptId));
+			accptncRslt.appendChild(accptd);
+			Element rjctRsn = document.createElement("RjctRsn");
+			accptncRslt.appendChild(rjctRsn);
+			Element prtry = document.createElement("Prtry");
+			prtry.appendChild(document.createTextNode(PrtryId));
+			rjctRsn.appendChild(prtry);
+
+			// Create OrgnlMndt element
+			Element orgnlMndt = document.createElement("OrgnlMndt");
+			undrlygAccptncDtls.appendChild(orgnlMndt);
+			Element orgnlMndtId = document.createElement("OrgnlMndtId");
+			orgnlMndtId.appendChild(document.createTextNode(Umrn));
+			orgnlMndt.appendChild(orgnlMndtId);
+			document.setXmlStandalone(true);
+			// Create a Transformer to write the XML to console
+//			TransformerFactory transformerFactory = TransformerFactory.newInstance();
+//			Transformer transformer = transformerFactory.newTransformer();
+//			transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+//			transformer.setOutputProperty("http://www.oracle.com/xml/is-standalone", "yes"); 
+//			transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+//			DOMSource source = new DOMSource(document);
+//			StreamResult result = null;
+////			logger.info("Return 3");
+//			if (Action.equals("A")) {
+////	            	result = new StreamResult(" "+ fileName + ".xml");
+//				result = new StreamResult(AMEND_FILE_PATH + fileName + ".xml");
+//			} else if (Action.equals("C")) {
+////	            	result = new StreamResult("D:/AADESH_MANDATE/Create/"+ fileName + ".xml");
+//				result = new StreamResult(CREATE_FILE_PATH + fileName + ".xml");
+//			} else {
+////	            	result = new StreamResult("D:/AADESH_MANDATE/Cancel/"+ fileName + ".xml");
+//				result = new StreamResult(CANCEL_FILE_PATH + fileName + ".xml");
+//			}
+//
+//			transformer.transform(source, result);
+			
+			TransformerFactory transformerFactory = TransformerFactory.newInstance();
+			Transformer transformer = transformerFactory.newTransformer();
+			transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+			transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
+			transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+
+			DOMSource source = new DOMSource(document);
+
+			// 2. Determine File Path
+			String filePath = "";
+			if (Action.equals("A")) filePath = AMEND_FILE_PATH + fileName + ".xml";
+			else if (Action.equals("C")) filePath = CREATE_FILE_PATH + fileName + ".xml";
+			else filePath = CANCEL_FILE_PATH + fileName + ".xml";
+
+			// 3. Manually write Header + Newline, then Transform the rest
+			try (FileOutputStream fos = new FileOutputStream(filePath);
+			     OutputStreamWriter writer = new OutputStreamWriter(fos, "UTF-8")) {
+			    
+			    // Write exact header and newline
+			    writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+			    
+			    // Transform the rest of the document directly into the same writer
+			    StreamResult result = new StreamResult(writer);
+			    transformer.transform(source, result);
+			}
+
+			logger.info("Mandate Generation Successfull");
+
+		} catch (Exception e) {
+			logger.error("Exception in creating xml");
+		}
+	}
+}
+
+
+
+
+package com.tcs.Mandate.utils;
+
+import java.io.UnsupportedEncodingException;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.util.Base64;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+import com.tcs.Mandate.Mandate_main;
+
+public class DecryptionUtilty {
+	
+	private static final Logger log = LogManager.getLogger(DecryptionUtilty.class.getName());
+	
+	public static String aesDecrypt(  String encrypted,String key,String initVector)
+			throws UnsupportedEncodingException {
+		byte[] keyb = keyToB(key);
+		byte[] ivb = keyToB(initVector);
+		String dec = decrypt1(keyb, ivb, encrypted);
+		return dec;
+
+	}
+
+	public static byte[] keyToB(String key) throws UnsupportedEncodingException {
+
+		byte[] keybyte = Base64.getDecoder().decode(key.getBytes("UTF-8"));
+
+		return keybyte;
+	}
+
+	public static String decrypt1(byte[] key, byte[] initVector, String encrypted) {
+        try {
+           // IvParameterSpec iv = new IvParameterSpec(initVector);
+             SecretKeySpec skeySpec = new SecretKeySpec(key, "AES");
+           Security.addProvider(new BouncyCastleProvider());
+          GCMParameterSpec gcmParameterSpec = new GCMParameterSpec(16 * 8, initVector);
+          // Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+         //New CR Start:22100077
+           Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+           //NEW CR End:22100077
+          //  cipher.init(Cipher.DECRYPT_MODE, skeySpec, iv);
+            cipher.init(Cipher.DECRYPT_MODE, skeySpec, gcmParameterSpec);
+
+            byte[] original = cipher.doFinal(Base64.getDecoder().decode(encrypted));
+            byte[] notOriginal = new String (original).replaceAll("\0", "").getBytes();
+            return new String(notOriginal);
+        } catch (NoSuchAlgorithmException e) {
+			log.error("Algorithm not found: {}", e);
+		} catch (NoSuchPaddingException e) {
+			log.error("Padding not found: {}", e);
+		} catch (InvalidKeyException e) {
+			log.error("Invalid key: {}", e);
+		} catch (InvalidAlgorithmParameterException e) {
+			log.error("Invalid algorithm parameter: {}", e);
+		} catch (IllegalBlockSizeException e) {
+			log.error("Illegal block size: {}", e);
+		} catch (BadPaddingException e) {
+			log.error("Bad padding: {}", e);
+		} 
+
+        return null;
+    }
+}
+
+
+
+
+package com.tcs.Mandate.utils;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+public class ExtractProp {
+	private static final Logger logger = LogManager.getLogger(ExtractProp.class.getName());
+	
+//	private static final String EXTRACT_PROPERTIES_FILE = "F://Pain_12//Pain12_Metadata//PropertyFiles//application.properties";
+	private static final String EXTRACT_PROPERTIES_FILE = "/AadeshApp/JAR/Pain12_Metadata/PropertyFiles/application.properties";
+
+	private static ExtractProp instance = new ExtractProp();
+	private String propertyValue = null;
+	Properties extractProp = null;
+
+	private ExtractProp() {
+		loadProperties();
+	}
+
+	private void loadProperties() {
+		InputStream bisExtract = null;
+		try {
+			bisExtract = new FileInputStream(EXTRACT_PROPERTIES_FILE);
+			this.extractProp = new Properties();
+			this.extractProp.load(bisExtract);
+		} catch (FileNotFoundException e) {
+			logger.error("Unable to load properties file: " + e.getMessage());
+		} catch (IOException e) {
+			logger.error("Error occurred while loading properties file: " + e.getMessage());
+		} finally {
+			closeExtractProperty(bisExtract);
+		}
+	}
+
+	public void closeExtractProperty(InputStream bisExtract) {
+		try {
+			if (bisExtract != null) {
+				bisExtract.close();
+			}
+		} catch (IOException e) {
+			logger.error("Unable to close InputStream: " + e.getMessage());
+		}
+	}
+
+	public String getExtractProperty(String key) {
+		this.propertyValue = this.extractProp.getProperty(key);
+		return this.propertyValue;
+	}
+
+	public int getExtractPropertyAsInt(String key) {
+		String value = this.extractProp.getProperty(key);
+		try {
+			return Integer.parseInt(value);
+		} catch (NumberFormatException e) {
+			logger.error("Error converting property value to int for key: " + key + ", value: " + value);
+			return 0; // or throw an exception based on your error handling strategy
+		}
+	}
+
+	public static ExtractProp getInstance() {
+		return instance;
+	}
+}
