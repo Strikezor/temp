@@ -1,0 +1,75 @@
+DB_URL=AopOKYFgLM2BSL7YcTXAkpMIFrxaeg7/m9+vtQs7c9pMLCIQEvXDGcQm2y+GbmgBHFXhsiAE0ltNtZo=
+USER=KY9IL8hnIuwcmPoFfGeX+WyRqFDpkA==
+PASS=KY9IL8hnIuwcmPoFfGeX+WyRqFDpkA==
+IV=AYEFyTcSaPmewXc+JPsGZA==
+Key=tIPr6vE4nRwzVHeIsApDO9N5Lo5lohB5XZTlirh1yvA=
+Timer_Delay=5000
+Timer_Period=10000
+SelectSQL=SELECT Action,Acct_no,Unqe_ref_no FROM ACHT WHERE STATUS IN ('41','43','45') AND techni_status IN ('02', '03', '04') AND STATUS_DATE=? FETCH FIRST 1 ROWS ONLY
+SelectSQL2=SELECT * FROM Acht WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+UpdateSQL=update Acht set status='42' WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+UpdateSQL2=update Acht set status='44' WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+UpdateSQL3=update Acht set status='46' WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+insertSQL=Insert into SM01 (ALERTCODE,ALARTCODEDESC,JOURNALNUM,CUSTOMER_NO,ACCOUNT_NO,EMAIL_ID,SEQUENCE,TRAN_AMT,SMS_FLAG,TRANCODE,ERROR_CODE,ERROR_MESSAGE,BATCHTANDEM,CUSTLANG,MOBILE_NO,ISD_CODE,SMSDATA,TRAN_DATE,TRAN_TIME,QSTR) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+MAX_SEQUENCE=999999\n
+cbsUrl=http://10.177.141.218:8089/Enc/getMobNum
+Sequence_file_path=E:\\Aadesh\\Sequence_gen\\File_sequence.txt
+Logger_path=E:\\ADESH\\SM01_table_update\\LOGS\\
+Logger_FileName=SM01_table_update_logs
+P01=11\n
+P02=23
+P03=8\n
+P04=8
+P05=30
+P06=23
+P07=6
+P08=8
+P09=8
+P10=20
+P11=8
+P12=23
+P13=5
+P14=7
+P15=10
+P16=10
+P17=8
+P18=10
+P19=10
+P20=5
+P21=40
+P22=7
+P23=20
+P24=22
+P25=25
+P26=17
+P27=20
+P28=15
+P29=3
+P30=11
+P31=11
+P32=3
+P33=16
+P34=25
+P35=10
+P36=12
+P37=12
+P38=11
+P39=14
+P40=30
+P41=3
+P42=5
+P43=18
+P44=16
+P45=3
+P46=8
+P47=20
+P48=20
+P49=9
+P50=10
+P51=16
+P52=8
+P53=40
+P54=8
+P55=6
+P56=2
+P57=2
