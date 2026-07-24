@@ -85,3 +85,23 @@ A Singleton configuration manager that loads external deployment properties into
 A utility class managing a persistent, file-based sequence number generator required for the SM01 table's SEQUENCE column.
  * **Sequence Retrieval (getSequence):** Calls readSequenceNumber() to get the current count. If the count exceeds 999,999, it resets the value to 1.
  * **State Persistence (saveSequenceNumber):** Uses a FileWriter to immediately write the incremented sequence number back to the text file specified by Sequence_file_path, ensuring the counter persists across application restarts.
+
+
+## Metadata and Configuration Details
+The SM01 Table Updation utility relies on various metadata and configuration parameters defined in its properties file to dictate its polling schedule, database queries, and SMS formatting constraints. Below are the specific configuration details extracted from the metadata:
+**Validation & Processing Parameters**
+ * **Timer Delay (Timer_Delay):** 5000 milliseconds (5 seconds) - The initial delay before the timer task begins execution.
+ * **Timer Period (Timer_Period):** 10000 milliseconds (10 seconds) - The frequency at which the database is polled for new records.
+ * **Maximum Sequence (MAX_SEQUENCE):** 999999 - The maximum allowable sequence number before the sequence file resets to 1.
+ * **CBS API Endpoint (cbsUrl):** [http://10.177.141.218:8089/Enc/getMobNum](http://10.177.141.218:8089/Enc/getMobNum) - The external URL invoked to retrieve customer mobile and CIF details.
+ * **Sequence File Path (Sequence_file_path):** E:\Aadesh\Sequence_gen\File_sequence.txt - The local file path used to persist the sequential counter.
+ * **Logger Configuration:** Stored at E:\ADESH\SM01_table_update\LOGS\ under the filename SM01_table_update_logs.
+**Database Queries**
+ * **SelectSQL:** Fetches a single pending record (FETCH FIRST 1 ROWS ONLY) from the ACHT table where the status is 41, 43, or 45, the technical status is 02, 03, or 04, and the status date matches the current date.
+ * **SelectSQL2:** Retrieves the complete row details from the ACHT table for a specific Action, Account Number, and Unique Reference Number.
+ * **UpdateSQL:** Updates the ACHT status to '42' to mark a previously '41' status record as processed.
+ * **UpdateSQL2:** Updates the ACHT status to '44' to mark a previously '43' status record as processed.
+ * **UpdateSQL3:** Updates the ACHT status to '46' to mark a previously '45' status record as processed.
+ * **insertSQL:** Inserts the final structured SMS alert (including alert code, account number, amount, sequence, and SMS payload) into the SM01 table.
+**SMS Parameter Length Constraints**
+ * The properties file enforces strict character limits for specific data fields dynamically injected into the SMS payload. Key truncations include P02 (Amount) limited to 23 characters, P05 (Action Description) limited to 30 characters, P23 (Corporate Name) limited to 20 characters, P25 (Reject Reason) limited to 25 characters, and P27 (UMRN) limited to 20 characters.
