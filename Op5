@@ -1,0 +1,142 @@
+# Technical Document
+SMS Notification Utility
+## Objective
+The SMS Notification Utility is designed to poll the core database for pending SMS alert records, securely format and encrypt the payload using a hybrid encryption architecture (AES and RSA), and transmit the encrypted messages to an external Notification Engine via IBM MQ. After successfully queueing the message, the utility updates the transaction status in the database to ensure idempotency and prevent duplicate processing.
+## Architecture
+The module follows a scheduled polling and message-queueing architecture consisting of the following components:
+ * **Scheduler / Launcher** – Utilizes a ScheduledExecutorService to trigger the polling and processing workflow at fixed intervals.
+ * **Database Manager** – Manages Oracle database connections via BoneCP connection pooling to execute read and update queries efficiently.
+ * **Processor (Runnable)** – The core worker thread (SmsNotificationStart) that reads database records, applies string formatting, performs cryptographic operations, and delegates message transmission.
+ * **IBM MQ Client** – Establishes secure TLS/SSL connections to the IBM MQ Queue Manager to push the final encrypted payloads to the notification queue.
+ * **Security & Encryption Utilities** – Handles AES credential decryption, SHA-256 data hashing, AES-based payload encryption, and RSA key-pair encryption for secure transit.
+## Table Used (Status Mapping)
+The application interacts primarily with the SM01 table to track the lifecycle of an SMS alert.
+| Status and Error Fields | Meaning |
+|---|---|
+| **SMS_FLAG = 'U'** | Unprocessed/Pending – The record is queued in the database and is ready to be picked up by the utility for processing. |
+| **SMS_FLAG = 'P'** | Processed – The SMS payload has been successfully encrypted and pushed to the IBM MQ. |
+## Classes
+### 1. SmsNotificationLauncher.java
+The main entry point and scheduler for the application.
+**Responsibilities:**
+ * Initializes the log4j logger and decrypts configuration properties (e.g., MQ credentials, file paths) at startup.
+ * Loads the RSA Public and Private keys into memory.
+ * Schedules the SmsNotificationStart worker thread to execute repeatedly with a fixed delay of 10 seconds.
+### 2. SmsNotificationStart.java
+The core worker class implementing Runnable to process pending SMS records.
+**Responsibilities:**
+ * Fetches pending records from the database using SM01_Manager.fetchDatafromdb().
+ * Establishes an SSL/TLS-secured connection to the IBM MQ Queue Manager.
+ * For each record, it generates a formatted plaintext string, creates a SHA-256 hash, and encrypts the hash using the RSA Private Key.
+ * Generates a dynamic 32-character AES Key and 16-character IV to encrypt the formatted payload.
+ * Encrypts the AES Key and IV using the RSA Public Key.
+ * Concatenates the final MQ message in the format: EncryptedHash|*|Encryptedkeys|*|EncryptedString and pushes it to the MQ queue.
+ * Updates the SM01 database table to mark the sequence as processed.
+### 3. SM01_Manager.java & ConnectionManager.java
+Handles all database interactions and connection pooling.
+**Responsibilities:**
+ * **ConnectionManager:** Configures a BoneCP connection pool using AES-decrypted Oracle database credentials, enforcing AES256 network encryption and SHA256 checksums.
+ * **SM01_Manager:** Executes dataReader to fetch rows as a List<Map<String, String>>. Executes sm01update to update SMS_FLAG to 'P', and sm01update2 to update the QSTR field with the formatted string.
+### 4. MQUtil.java & MQConnectorService.java
+Manages the IBM MQ integration.
+**Responsibilities:**
+ * Connects to the MQ environment using the specified hostname, port, channel, and Cipher Suite (TLS_RSA_WITH_AES_256_CBC_SHA).
+ * Puts the final encrypted string message into the NE_ALERT_CBSQ queue using MQConstants.MQOO_OUTPUT.
+### 5. StringGenerationUtility.java
+A highly specialized utility for string formatting and hybrid cryptography.
+**Responsibilities:**
+ * **Formatting:** Zero-pads database fields to strictly required lengths and constructs the caret-delimited (^) plaintext string.
+ * **Hashing:** Generates SHA-256 hashes of the plaintext data.
+ * **Encryption:** Provides encryptData to encrypt the payload using AES/CBC/PKCS5Padding, encryptHash to sign the hash via RSA, and encryptWithPublicKey to secure the AES key/IV via RSA.
+### 6. AESdecrypt.java & PropertyFileReader.java
+Configuration and credential management utilities.
+**Responsibilities:**
+ * Reads the SMS_Notification.properties file.
+ * Uses AES/GCM/NoPadding to securely decrypt database URLs, usernames, passwords, and keystore paths dynamically in memory.
+## Metadata and Configuration Details
+The utility relies on various configuration parameters defined in its properties file to manage infrastructure connections:
+**Execution Parameters**
+ * **Thread Schedule:** The ScheduledExecutorService runs with a fixed delay of 10 seconds.
+**IBM MQ Details**
+ * **Hostname:** 10.189.43.66.
+ * **Port:** 1605.
+ * **Channel:** RO.SVRCONN.
+ * **Local Queue Manager:** CBSLITE.
+ * **Queue Name (NE_ALERT_CBSQ):** AADESHQ01.
+ * **Cipher Suite:** TLS_RSA_WITH_AES_256_CBC_SHA (Enforcing secure SSL/TLS transit).
+ * **MQ Store:** Secure keystore path (AES Encrypted).
+**Database Connection Pool Settings (BoneCP)**
+ * **Minimum Connections (minConn):** 5.
+ * **Maximum Connections (maxConn):** 10.
+ * **Partition Count (partitionCount):** 2.
+ * **Idle Max Age (idleMaxAge):** 60 minutes.
+## Database Queries
+Below are the dynamically loaded SQL queries used to manage the SM01 table:
+ * **dataReaderQuery:** Fetches pending records from the database where the SMS flag is set to 'U' (Unprocessed).
+   SELECT alertCode,journalNum,customer_no,account_no,sequence,account_Bal,tranCode,tran_date,tran_time,batchTandem,custLang,mobile_no,isd_code,Email_id,smsData FROM SM01 where SMS_FLAG='U'
+ * **updateQuery1:** Updates the status flag of the record to 'P' (Processed) once the message has been queued in MQ.
+   update SM01 set SMS_FLAG='P' where SEQUENCE=?
+ * **updateQuery2:** Updates the QSTR column with the finalized plaintext formatted string for audit purposes.
+   update SM01 set QSTR=? where SEQUENCE=?
+## SMS Text Formatting and Conditions
+Before encryption, the StringGenerationUtility rigorously formats the database row into a standardized caret-delimited (^) string. The formatting enforces strict character lengths:
+ * **Zero-Padding:**
+   * journalNum and sequence are zero-padded to exactly 9 characters.
+   * customer_no and account_no are zero-padded to exactly 17 characters.
+   * tranCode is zero-padded to exactly 6 characters.
+ * **Account Balance Formatting:** The decimal point in accountBal is replaced with a "0", the entire string is zero-padded to 17 characters, and a literal + sign is appended to the end.
+ * **Dynamic Parsing:** The smsData string is split by commas. Any token containing a colon (:) is extracted and appended to the final string, separated by carets.
+ * **Final Plaintext Payload:** The fully constructed string follows the sequence:
+   <GeneratedTime>^<alertCode>^<journalNum>^<Customer_No>^<Account_no>^<Sequence>^<Account_bal>^<tran_code>^<tran_date>^<tran_time>^<batchTandem>^<custLang>^<mobile_no>^<isd_code>^<Email_id>^<ParsedSmsData>.
+## Summary
+The SMS Notification Utility acts as a secure bridge between the core banking database and the external Notification Engine. It actively polls the SM01 table for pending messages, strictly formats the raw data according to rigid character padding rules, and packages the payload using a highly secure hybrid encryption mechanism—AES for the payload, and RSA for the cryptographic keys and SHA-256 hashes. The fully encrypted message is safely transmitted over an SSL/TLS-secured IBM MQ connection. Upon successful transmission, the utility updates the database records to ensure reliable, idempotent SMS alert dispatch without duplication.
+
+
+
+
+### Classes
+#### 1. SmsNotificationLauncher.java
+The main entry point and execution orchestrator for the SMS Notification Utility.
+ * **Initialization:** Loads configuration parameters from the SMS_Notification.properties file using PropertyFileReader. It initializes the log4j2 logger and triggers the configuration of the BoneCP database connection pool via ConnectionManager.
+ * **Cryptographic Setup:** Reads the AES-encrypted paths for the RSA Private and Public keys, decrypts the paths, and loads the actual keys into memory using StringGenerationUtility.getPrivateKey and getPublicKey.
+ * **Scheduling:** Initializes a ScheduledExecutorService that continuously triggers the SmsNotificationStart worker thread with a fixed delay of 10 seconds.
+#### 2. SmsNotificationStart.java
+A worker class implementing the Runnable interface, responsible for executing the core data fetching, cryptographic packaging, and message queuing workflow.
+ * **Data Retrieval:** Fetches pending SMS records from the database by calling SM01_Manager.fetchDatafromdb().
+ * **MQ Connection:** Establishes a secure connection to the IBM MQ Queue Manager using MQUtil.connectToMQ, setting required SSL/TLS properties (truststore, cipher mappings, FIPS requirements).
+ * **Data Packaging & Encryption:** For each database row:
+   * Formats the raw data into a caret-delimited string using StringGenerationUtility.fromatData.
+   * Generates a SHA-256 hash of the formatted string and encrypts it using the RSA Private Key to create EncryptedHash.
+   * Generates a random 32-character AES Key and a 16-character IV, encrypting the formatted string via AES (EncryptedString).
+   * Encrypts the concatenated AES Key and IV using the RSA Public Key (Encryptedkeys).
+   * Concatenates the final payload as EncryptedHash|*|Encryptedkeys|*|EncryptedString.
+ * **Transmission & DB Update:** Pushes the final payload to the configured MQ Queue and updates the database row's status (SMS_FLAG to 'P') and QSTR column using SM01_Manager.
+#### 3. ConnectionManager.java
+Initializes and manages the database connections using the BoneCP connection pooling library.
+ * **Secure Oracle JDBC Configuration:** Sets stringent Oracle connection properties requiring network encryption (AES256) and checksums (SHA256).
+ * **Credential Decryption:** A static block decrypts the database URL, username, and password in memory using the AESdecrypt utility before applying them to the BoneCPConfig.
+ * **Pool Management:** Configures performance limits like minimum/maximum connections, partition count, and idle connection testing intervals, providing the application with secure Connection objects.
+#### 4. SM01_Manager.java
+Manages the application's data persistence and retrieval via parameterized SQL statements.
+ * **Data Fetching:** The fetchDatafromdb method executes the configured dataReaderQuery to fetch unprocessed records (SMS_FLAG='U'), mapping the ResultSet into a List<Map<String, String>>.
+ * **Status Updates:** The updateSmo1 method executes the updateQuery1 to mark a specific record sequence as processed (SMS_FLAG='P'). The updateSm01 method executes updateQuery2 to persist the formatted plaintext string into the QSTR column.
+#### 5. MQUtil.java & MQConnectorService.java
+Handles all IBM MQ integration and message transmission.
+ * **Environment Configuration:** MQUtil configures the MQEnvironment with the hostname, port, channel, and specific sslCipherSuite before initializing the MQQueueManager.
+ * **Message Dispatch:** The sendMessage method creates an MQMessage, writes the encrypted string to it, and puts it onto the specified queue using MQConstants.MQOO_OUTPUT.
+ * **Connector Service:** MQConnectorService provides extended, granular helper methods for accessing queues with specific read/write options (e.g., MQGMO_SYNCPOINT, MQPMO_FAIL_IF_QUIESCING).
+#### 6. StringGenerationUtility.java
+A comprehensive utility class handling string padding, hashing, and hybrid cryptography.
+ * **Formatting:** Contains methods like formatStringLength to zero-pad fields, formatAccountBalance to remove decimals and append a '+', and fromatData to build the final caret-delimited string sequence.
+ * **Hashing & Key Generation:** Uses MessageDigest to generate SHA-256 hashes. Generates secure, randomized alphanumeric AES keys and IVs using Math.random().
+ * **Cryptography:**
+   * **AES:** Uses Cipher.getInstance("AES/CBC/PKCS5Padding") to encrypt the payload.
+   * **RSA:** Loads keys via PKCS8EncodedKeySpec (Private) and X509EncodedKeySpec (Public). Encrypts the hash using standard RSA and encrypts the AES credentials using RSA/ECB/OAEPwithSHA1andMGF1Padding.
+#### 7. AESdecrypt.java
+Provides specific AES-based decryption used primarily during application startup.
+ * **GCM Decryption:** Implements Cipher.getInstance("AES/GCM/NoPadding") to securely decrypt sensitive initialization values like database credentials and MQ keystore paths fetched from the properties file.
+#### 8. PropertyFileReader.java & AadeshConstants.java
+Configuration management components.
+ * **PropertyFileReader:** Locates and loads .properties files (either via ResourceBundle or file path FileInputStream) into a cached Properties object, providing a getPropertyKeyValue lookup method.
+ * **AadeshConstants:** An Enum class defining standardized strings for property keys (e.g., MINCONN, DBURL, IDLE_MAX_AGE) to prevent typos during configuration lookups.
+
