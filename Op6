@@ -112,3 +112,8 @@ A Singleton configuration manager that reads deployment properties from the file
  * **Initialization:** Automatically reads the application.properties file located at /AadeshApp/JAR/Pain12_Metadata/PropertyFiles/ via a FileInputStream into a java.util.Properties object during initialization.
  * **Access Methods:** Provides the getExtractProperty(String key) method for retrieving string-based configurations and getExtractPropertyAsInt(String key) for parsing numeric configurations, implementing safe error handling for missing or malformed keys.
 
+
+
+
+## Summary
+The PAIN 12 XML Generation Utility automates the creation of ISO 20022 compliant PAIN.012.001.01 mandate acknowledgment files. Operating on a scheduled timer, the utility continuously polls the core database (ACHT table) to identify mandate requests (Create, Amend, or Cancel) that have completed their validation lifecycle and require an acceptance or rejection response. Upon fetching a pending record, it dynamically constructs an XML Document Object Model (DOM), embedding original transaction details, resolving bank identifiers, and determining the appropriate <Accptd> status and rejection reasons based on the technical status. The generated XML is strictly formatted, transformed, and routed directly to the appropriate downstream encryption directory (CREATE, AMEND, or CANCEL) based on the action type. Finally, the utility updates the database, advancing the transaction status to '05' and recording the output filename, ensuring complete traceability and preventing duplicate file generation.
