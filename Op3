@@ -1,0 +1,87 @@
+# Technical Document
+SM01 Table Updation
+## Objective
+It is an SM01 Table Updation Utility. It periodically polls the database for pending ACHT records, retrieves customer mobile numbers via a CBS API, formats tailored SMS alert payloads (such as mandate acceptance, rejection, or amendment), and inserts these details into the SM01 table for SMS dispatch. After successfully queuing the SMS, the module updates the processing status back in the source ACHT table.
+## Architecture
+The module follows a scheduled batch processing architecture consisting of the following components:
+ * **Scheduler / Launcher** – Utilizes a java.util.Timer and TimerTask to periodically execute the database polling and processing logic based on configured delays.
+ * **Processor** – Fetches pending records from the database, orchestrates external API calls, formats the SMS data, and handles database insertions and updates.
+ * **API Client** – Communicates with the external CBS system via an HTTP POST request to retrieve the customer's mobile number, ISD code, and CIF number.
+ * **Sequence Manager** – Manages a file-based sequential counter required for tracking the SM01 database insertions.
+ * **Configuration Manager** – Loads runtime properties from a properties file and securely decrypts database credentials.
+## Table Used
+| Status and other fields | Meaning |
+|---|---|
+| **ACTION = "D"** | Sets Alert_code to "TA". |
+| **sms_status = "45"** | Sets Alert_code to "TA" if action is not "D". |
+| **TECHNI_STATUS = "03"** | Sets Alert_code to "MR" (Mandate Reject). |
+| **TECHNI_STATUS = "04"** | Sets Alert_code to "MA" (Mandate Accept). |
+| **TECHNI_STATUS = "02"** | Sets Alert_code to "TA". |
+| **sms_status = "41"** | Triggers UpdateSQL query to update the ACHT status after successful SM01 insertion. |
+| **sms_status = "43"** | Triggers UpdateSQL2 query to update the ACHT status after successful SM01 insertion. |
+| **sms_status = "45"** | Triggers UpdateSQL3 query to update the ACHT status after successful SM01 insertion. |
+## Classes
+### 1. Update_launcher.java & Helper (TimerTask)
+The Update_launcher class is the main entry point that initializes logging and schedules the polling task. It uses a Timer to repeatedly execute the Helper task based on Timer_Delay and Timer_Period properties.
+**Responsibilities:**
+ * Initializes log4j2 configurations.
+ * The Helper inner class decrypts the database URL, username, and password using AES/GCM/NoPadding encryption.
+ * Executes a selection query (Selection_Query) using the current date to check if pending files/records exist.
+ * Triggers the update_connection processor if records are found.
+### 2. update_connection.java
+This class contains the core business logic for processing ACHT records and inserting them into the SM01 table.
+**Responsibilities:**
+ * Queries the database (SelectSQL2) to extract mandate details like Account Number, UMRN, Amount, and Corporate Name.
+ * Evaluates the ACTION, STATUS, and TECHNI_STATUS to determine the appropriate SMS Alert_code (MR, MA, or TA).
+ * Invokes the getMobileFromCBS method, which sends a JSON payload to the cbsUrl via java.net.http.HttpClient to fetch the customer's Mobile Number, ISD Code, and CIF Number.
+ * Validates and trims the retrieved mobile number based on strict length and digit-only constraints (e.g., stripping "91" or "0" prefixes).
+ * Constructs the SMS payload string dynamically using getParamConstructforMA, getParamConstructforMR, or getParamConstructforTA methods based on the alert type.
+ * Inserts the fully constructed record into the SM01 table and subsequently updates the original ACHT table status.
+### 3. MobileNumber.java (Inner Class)
+A simple POJO (Plain Old Java Object) used to map and store the JSON response fields returned by the CBS API.
+**Responsibilities:**
+ * Holds data fields: isdCode, mobNo, cifNo, verificationFlag, error_code, and error_description.
+### 4. ExtractProp.java
+A singleton configuration class responsible for loading properties from the SM01_Update.properties file.
+**Responsibilities:**
+ * Loads configuration keys such as database credentials, query strings, and parameter limits into memory at startup.
+ * Provides helper methods like getExtractProperty and getExtractPropertyAsInt to retrieve values safely.
+### 5. Update_service.java
+Manages a file-based sequence number generator required for the SM01 table insertions.
+**Responsibilities:**
+ * Reads the current sequence number from a specified local text file (Sequence_file_path).
+ * Increments the sequence number, automatically resetting it to 1 if it exceeds the maximum threshold of 999,999.
+ * Saves the updated sequence number back to the file to maintain state across executions.
+## Summary
+The SM01 Table Updation module automates the generation of SMS alerts for ACH mandate transactions. Operating on a timer-based schedule, it securely connects to the database to poll for pending mandate records. The module enriches these records by querying an external CBS API to retrieve accurate customer mobile numbers and CIF details. It then applies business rules to determine the alert type (Mandate Accept, Mandate Reject, or Transaction Alert) and formats a specific SMS data string. Finally, it inserts the formatted alert into the SM01 table using a custom file-based sequence generator and updates the source ACHT table to mark the record as processed, ensuring reliable and stateful notification delivery.
+
+
+
+
+
+### Classes
+#### 1. Update_launcher.java & Helper (TimerTask)
+The Update_launcher class acts as the main entry point and scheduler for the application, while the internal Helper class handles the background execution.
+ * **Initialization & Scheduling:** The Update_launcher configures log4j2 logging using properties (Logger_path, Logger_FileName) and schedules a TimerTask (Helper) using a java.util.Timer based on Timer_Delay and Timer_Period.
+ * **Secure Credential Loading:** Within the Helper class, a static block uses custom aesDecrypt and decrypt1 methods (implementing AES/GCM/NoPadding) to securely decrypt the database URL, username, and password.
+ * **Polling Logic:** The run() method inside Helper calls filesExist() which executes the Selection_Query against the database for the current date. If a record is found, it extracts ACTION, Acct_no, and Unqe_ref_no, and triggers the update_connection processor.
+#### 2. update_connection.java
+This is the core processor class responsible for data enrichment, business logic evaluation, API communication, and database transactions.
+ * **CBS API Communication (getMobileFromCBS):** Constructs a JSON payload containing CIF_ACCOUNT_NUMBER and uses java.net.http.HttpClient to send a POST request to the cbsUrl. It parses the JSON response using Gson to extract ISD_CODE, MOBILE_NUMBER, and CIF_NO. It strictly evaluates the VERIFICATION_FLAG; valid flags (Y, E, S) keep the current numbers, invalid flags (N, X) revert to old numbers, and other flags clear the data.
+ * **SMS Payload Construction:** Contains specific formatting methods (getParamConstructforMA, getParamConstructforMR, getParamConstructforTA) that build concatenated strings (e.g., ^P27:UMRN^P02:Amount). Each parameter string's length is strictly truncated based on limits defined in the properties file.
+ * **Business Rules & Data Formatting (findFilesforMandate):**
+   * Executes SelectSQL2 to retrieve mandate details.
+   * Determines the Alert_code based on ACTION, STATUS (45), and TECHNI_STATUS (02, 03, 04) to categorize the message as Mandate Reject (MR), Mandate Accept (MA), or Transaction Alert (TA).
+   * Sanitizes the retrieved mobile number by verifying it contains only digits (isDigitOnly) and stripping standard prefixes like "91" or "0" to normalize it to 10 digits.
+ * **Database Updates:** Retrieves a sequential ID from Update_service and executes insertSQL to queue the message in the SM01 table. Based on the original sms_status (41, 43, 45), it conditionally executes UpdateSQL, UpdateSQL2, or UpdateSQL3 to mark the record as processed in the source ACHT table.
+#### 3. update_connection.MobileNumber (Inner Class)
+A standard POJO (Plain Old Java Object) used by the Gson library to temporarily store the parsed JSON response from the CBS API.
+ * **Data Fields:** Defines private fields for isdCode, mobNo, cifNo, verificationFlag, error_code, and error_description, exposing them via public getters and setters for use in the main processor.
+#### 4. ExtractProp.java
+A Singleton configuration manager that loads external deployment properties into memory.
+ * **Initialization:** Reads the SM01_Update.properties file from a hardcoded relative path (/AadeshApp/JAR/SM01_table_updation_MetaData/PROPERTY_FILE/SM01_Update.properties) using a FileInputStream.
+ * **Data Access:** Exposes getExtractProperty(String key) to fetch string values and getExtractPropertyAsInt(String key) which safely parses configuration values into integers (defaulting to 0 on a NumberFormatException).
+#### 5. Update_service.java
+A utility class managing a persistent, file-based sequence number generator required for the SM01 table's SEQUENCE column.
+ * **Sequence Retrieval (getSequence):** Calls readSequenceNumber() to get the current count. If the count exceeds 999,999, it resets the value to 1.
+ * **State Persistence (saveSequenceNumber):** Uses a FileWriter to immediately write the incremented sequence number back to the text file specified by Sequence_file_path, ensuring the counter persists across application restarts.
