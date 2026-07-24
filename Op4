@@ -119,6 +119,24 @@ Below are the parameterized SQL queries utilized by the PAIN Processing utility,
 
 
 
+## SMS Text Formatting and Conditions
+The SM01 Table Updation utility dynamically constructs the SMS payload (Sms_data) based on the transaction's technical status, SMS status, and action type. The parameters within the SMS string are concatenated using a caret (^) delimiter, and each field is strictly truncated to its maximum configured length defined in the properties file (e.g., P02 is limited to 23 characters, P27 to 20 characters).
+The utility generates three distinct types of SMS alerts:
+ * **Mandate Accept (MA)**
+   * **Conditions:** Triggered when the TECHNI_STATUS equals "04" (provided the ACTION is not "D" and STATUS is not "45").
+   * **Payload Structure:** P27:<UMRN>^P02:<Amount>^P23:<Corporate_Name>^P05:<Action_Description>.
+   * **Action Description (P05 Mapping):** "Created." (if Action is 'C'), "Amended." (if Action is 'A'), or "Cancelled." (for any other action).
+ * **Mandate Reject (MR)**
+   * **Conditions:** Triggered when the TECHNI_STATUS equals "03" (provided the ACTION is not "D" and STATUS is not "45").
+   * **Payload Structure:** P05:<Action_Description>^P27:<UMRN>^P02:<Amount>^P23:<Corporate_Name>^P25:<Reject_Reason>.
+   * **Action Description (P05 Mapping):** "Created" (if Action is 'C'), "Amended" (if Action is 'A'), or "Cancelled" (for any other action).
+ * **Transaction Alert (TA)**
+   * **Conditions:** Triggered explicitly when the ACTION equals "D" (Cancellation), OR when the STATUS equals "45", OR when the TECHNI_STATUS equals "02".
+   * **Payload Structure:** P05:<Action_Description>^P27:<UMRN>^P02:<Amount>^P23:<Corporate_Name>.
+   * **Action Description (P05 Mapping):** "Registration-" (if Action is 'C'), "Amendment-" (if Action is 'A'), or "Cancellation-" (for any other action).
+
+
+
 
 ### Classes
 #### 1. Pain_09_10_main.java & Helper (TimerTask)
