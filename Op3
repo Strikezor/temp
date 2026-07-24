@@ -105,3 +105,26 @@ The SM01 Table Updation utility relies on various metadata and configuration par
  * **insertSQL:** Inserts the final structured SMS alert (including alert code, account number, amount, sequence, and SMS payload) into the SM01 table.
 **SMS Parameter Length Constraints**
  * The properties file enforces strict character limits for specific data fields dynamically injected into the SMS payload. Key truncations include P02 (Amount) limited to 23 characters, P05 (Action Description) limited to 30 characters, P23 (Corporate Name) limited to 20 characters, P25 (Reject Reason) limited to 25 characters, and P27 (UMRN) limited to 20 characters.
+
+
+
+## Database Queries
+Below are the parameterized SQL queries utilized by the SM01 Table Updation utility for polling database records, updating transaction statuses, and inserting SMS alert payloads into the queue, as defined in the metadata properties:
+ * **SelectSQL:**
+   Used by the polling timer task to find the next available pending mandate record that requires an SMS notification. It specifically targets records with specific processing statuses (41, 43, 45) and technical statuses (02, 03, 04) for the current date, fetching only one row at a time to process sequentially.
+   SELECT Action,Acct_no,Unqe_ref_no FROM ACHT WHERE STATUS IN ('41','43','45') AND techni_status IN ('02', '03', '04') AND STATUS_DATE=? FETCH FIRST 1 ROWS ONLY
+ * **SelectSQL2:**
+   Used to fetch the complete row details (including UMRN, Mandate Amount, Corporate Name, and technical status) from the ACHT table for a specific Action, Account Number, and Unique Reference Number identified by SelectSQL.
+   SELECT * FROM Acht WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+ * **UpdateSQL:**
+   Used to update the ACHT status to '42' after the SMS alert has been successfully inserted into the SM01 table. This specifically targets records that initially had a status of '41'.
+   update Acht set status='42' WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+ * **UpdateSQL2:**
+   Used to update the ACHT status to '44' after the SMS alert has been successfully queued. This specifically targets records that initially had a status of '43'.
+   update Acht set status='44' WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+ * **UpdateSQL3:**
+   Used to update the ACHT status to '46' after the SMS alert has been successfully queued. This specifically targets records that initially had a status of '45'.
+   update Acht set status='46' WHERE Action=? AND Acct_no=? AND Unqe_ref_no=?
+ * **insertSQL:**
+   Used to insert the fully constructed SMS alert payload into the SM01 table for dispatch. This includes mapped data such as the alert code (MA, MR, TA), customer CIF, account number, mobile number, dynamically generated sequence number, and the formatted SMSDATA string.
+   Insert into SM01 (ALERTCODE,ALARTCODEDESC,JOURNALNUM,CUSTOMER_NO,ACCOUNT_NO,EMAIL_ID,SEQUENCE,TRAN_AMT,SMS_FLAG,TRANCODE,ERROR_CODE,ERROR_MESSAGE,BATCHTANDEM,CUSTLANG,MOBILE_NO,ISD_CODE,SMSDATA,TRAN_DATE,TRAN_TIME,QSTR) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
