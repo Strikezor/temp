@@ -117,3 +117,47 @@ Below are the parameterized SQL queries utilized by the PAIN Processing utility,
    Fetches the specific rejection reason from the ACHE table using the mapped CBS_ERR_NO.
    select ACHE_REJECTION_CODE from ACHE where ACHE_ERROR_CODE=?
 
+
+
+
+### Classes
+#### 1. Pain_09_10_main.java & Helper (TimerTask)
+The main entry point and execution orchestrator for the PAIN XML processing utility.
+ * **Initialization & Scheduling:** Initializes the log4j2 logger and uses a java.util.Timer to schedule the Helper TimerTask to run periodically based on Timer_Delay and Timer_Period.
+ * **Folder Archiving:** The processXMLFiles method scans the source directory, backing up all subdirectories and their contents recursively into the Pain_backup_path using Files.walk and Files.copy before processing begins.
+ * **Routing Logic:** Iterates through the folders and identifies the transaction type based on naming conventions (CREATE, AMEND, CANCEL). It applies date and folder name validations before routing the XML file to the appropriate XML_READER method and subsequently calling the respective UpdateTable... class.
+ * **Cleanup:** After processing all XML files and images (_front.tif, _detailfront.jpg), it physically moves the files to success or failure directories and uses Files.walkFileTree to delete the empty original source folders.
+#### 2. XML_READER.java & JAXB Domain Classes
+Handles the conversion of raw XML files into Java objects using the Jakarta XML Binding (JAXB) API.
+ * **Unmarshalling:** Contains specific methods (readXml9, readXml10, readXml11) that instantiate a JAXBContext and an Unmarshaller to parse the physical file into its respective Document object.
+ * **Domain Objects:** A large collection of POJOs (e.g., Pain_09_Document, MndtAmdmntReq, GrpHdr, Dbtr, Cdtr) mapped directly to the ISO 20022 schemas. These use annotations like @XmlRootElement, @XmlAccessorType(XmlAccessType.FIELD), and @XmlElement to accurately map namespaces and XML tags to Java fields.
+#### 3. UpdateTableForCreate.java
+Contains the core business logic and database operations for processing PAIN 09 (Mandate Initiation) requests.
+ * **Data Extraction:** Extracts all relevant mandate fields from the unmarshalled Pain_09_Document object, including UMRN, Collection Amount, Maximum Amount, Debtor/Creditor details, and Frequency.
+ * **Sequence Generation:** Generates a 31-digit padded sequence number using the Pain10_sequence class to build the UNQE_REF_NO.
+ * **Validation Rules:** Performs extensive basic validations (checking for nulls and required fields) and complex validations. It verifies bank account check digits via CalculateCheckDigit.validateCheckDigit, ensures the UMRN does not already exist in ACMM or ACHT, and evaluates mandate amounts against TReDS limits (TREDS_LIMIT_CARD) and card limits (AMOUNT1_CARD) based on the Sponsor Bank.
+ * **Database Insertion:** If all validations pass, it inserts the record into the ACHT table with ACTION as "C" and TECHNI_STATUS as "00". If validations fail, it fetches the corresponding rejection reason from ACHE and inserts the record with TECHNI_STATUS "01" and the specific CBS_ERR_NO.
+#### 4. UpdateTableForAmend.java
+Contains the processing logic for PAIN 10 (Mandate Amendment) requests.
+ * **Data Extraction:** Extracts updated mandate details and the Original Mandate ID (OrgnlMndtId) from the Pain_10_Document.
+ * **State Verification:** Queries the ACMM table using checkACMMEntry to verify that the original mandate exists and has a valid, active status ("00" or "02"). If the status is invalid, it triggers CBS_ERR_NO "3328".
+ * **Database Insertion:** Inserts the amended mandate record into the ACHT table with ACTION set to "A" and links the respective image filenames.
+#### 5. UpdateTableForCancel.java
+Contains the processing logic for PAIN 11 (Mandate Cancellation) requests.
+ * **Data Retrieval:** Extracts the UMRN and cancellation reason from the Pain_11_document and queries the ACMM table to fetch the entirety of the original mandate's details.
+ * **Historical Backup (ACMH):** Inserts the retrieved active mandate details into the ACMH (Mandate History) table to preserve its pre-cancellation state.
+ * **ACMM Update:** Executes an UPDATE query against the ACMM table to apply the cancellation reason and alter the mandate's operational status.
+ * **ACHT & LNFT Insertion:** Inserts the cancellation record into the ACHT table with ACTION set to "D". Furthermore, it generates a unique Request Reference Number and inserts an audit log into the MR_LNFT table.
+#### 6. Utility.java
+A helper class providing data sanitization, formatting, and cryptographic decryption.
+ * **Cryptography:** Provides aesDecrypt and decrypt1 methods using AES/GCM/NoPadding to securely decrypt database credentials.
+ * **Data Normalization:** Includes removeLeadingZeros and convertTo17Chars to strip non-digit characters, remove leading zeros, and pad account numbers accurately for downstream check digit validation.
+ * **Formatting:** Contains utilities for date parsing and decimal formatting.
+#### 7. Pain10_sequence.java
+A highly scalable sequence generator.
+ * **BigInteger Sequencing:** Unlike standard integer sequences, this uses java.math.BigInteger to generate sequence numbers up to a maximum limit of 36 nines (999...999).
+ * **File Persistence:** Reads from and writes to Sequence_file_path, ensuring sequence continuity across utility restarts, resetting to 1 only when the massive maximum limit is breached.
+#### 8. ExtractProp.java
+A Singleton configuration manager.
+ * **Initialization:** Loads runtime configuration parameters from the local Pain10.properties file using a FileInputStream.
+ * **Data Access:** Exposes getExtractProperty(String key) and getExtractPropertyAsInt(String key) for the rest of the application to consume settings like database credentials, API configurations, and file paths.
