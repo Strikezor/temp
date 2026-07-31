@@ -551,3 +551,154 @@ public class EDMSUpload_Controller {
 		}
 	}
 }
+
+
+
+
+
+package com.tcs.bancs.microservices.controller;
+
+// ... (keep your existing imports)
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+// Change to Component as this is now a background job, not a web controller
+@Component
+public class EDMSUpload_Scheduler {
+    
+    private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSUpload_Scheduler.class);
+    
+    @Autowired
+    private static EDMS_REPO edms_REPO;
+
+    private static String edmsURL1 = null;
+    private static String hostPublic = null;
+    private static String privateKey_DigISign = null;
+    private static String DocumentPath = null;
+    private static final long MAX_SIZE_BYTES = 30 * 1024 * 1024;
+    private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
+    
+    // ... (Keep your existing constructor and property initializations)
+    
+    // Use the cron expression from your properties file
+    @Scheduled(cron = "${edms.upload.cron}")
+    public void executeEDMSUploadTask() {
+        logger.info("Scheduled EDMS Image upload started");
+
+        try {
+            // Replaced HTTP request specific date handling with standard local variables
+            DateTimeFormatter entryDate1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss:SSS");
+            LocalDateTime timex = LocalDateTime.now();
+            String entryDate = entryDate1.format(timex);
+            String teller_date = entryDate.replace("-", "").substring(0, 9);
+            
+            Date date = new Date();
+            SimpleDateFormat dateFormat = new SimpleDateFormat("dd-MM-yyyy");
+            String uploadDate = dateFormat.format(date);
+            
+            CommonDataBean dataBean = new CommonDataBean();
+            dataBean.setCategory("Image");
+            dataBean.setBranchCode("61076");
+            dataBean.setCreationDate(uploadDate);
+            dataBean.setUploadDate(uploadDate);
+            dataBean.setApplicationID("AADESH_CBSDEV");
+
+            List<Object[]> dbRecords = edms_REPO.getImages();
+            if (dbRecords.isEmpty()) {
+                logger.info("No pending records found.");
+                return;
+            }
+
+            // Build the Map and Set of REQUIRED files only
+            Map<String, String> fileNameToUmrnMap = new HashMap<>();
+            Set<String> requiredFileNames = new HashSet<>();
+
+            for (Object[] record : dbRecords) {
+                String umrn = record[0] != null ? record[0].toString() : null;
+                String img1 = record[1] != null ? record[1].toString() : null;
+                String img2 = record[2] != null ? record[2].toString() : null;
+
+                if (img1 != null && !img1.isEmpty()) {
+                    fileNameToUmrnMap.put(img1, umrn);
+                    requiredFileNames.add(img1);
+                }
+                if (img2 != null && !img2.isEmpty()) {
+                    fileNameToUmrnMap.put(img2, umrn);
+                    requiredFileNames.add(img2);
+                }
+            }
+
+            File sourceFolder = new File(DocumentPath);
+            FilenameFilter strictFilter = (dir, name) -> requiredFileNames.contains(name);
+            File[] listOfDocuments = sourceFolder.listFiles(strictFilter);
+
+            if (listOfDocuments == null || listOfDocuments.length == 0) {
+                logger.info("No matching files found in source folder for the DB records.");
+                for (String fileName : requiredFileNames) {
+                    String umrn = fileNameToUmrnMap.get(fileName);
+                    logger.warn("File not found in source folder: {} (UMRN: {})", fileName, umrn);
+                }
+                return;
+            }
+
+            List<ProcessedImageRecord> processedBatch = new ArrayList<>();
+            long currentTotalSize = 0;
+
+            for (File document : listOfDocuments) {
+                String fileName = document.getName();
+                
+                 if (edms_REPO.checkImageExist(fileName)) {
+                        logger.info("Skipping already uploaded image (DB check): " + fileName);
+                        continue;
+                    }
+
+                if (!fileNameToUmrnMap.containsKey(fileName)) {
+                    continue;
+                }
+
+                long fileSize = document.length();
+                if (currentTotalSize + fileSize > MAX_SIZE_BYTES) {
+                    logger.info("Max size limit reached.");
+                    break;
+                }
+
+                byte[] fileContent = Files.readAllBytes(document.toPath());
+                String base64Doc = Base64.getEncoder().encodeToString(fileContent);
+                String umrn = fileNameToUmrnMap.get(fileName);
+
+                processedBatch.add(new ProcessedImageRecord(umrn, fileName, base64Doc));
+                currentTotalSize += fileSize;
+
+                logger.info("Processing: " + fileName + " (UMRN: " + umrn + ")");
+            }
+
+            if (processedBatch.size() % 2 != 0) {
+                logger.info("Odd count detected, removing last item.");
+                processedBatch.remove(processedBatch.size() - 1);
+            }
+
+            if (processedBatch.isEmpty()) return;
+
+            List<String> documents = processedBatch.stream().map(ProcessedImageRecord::getBase64Content)
+                    .collect(Collectors.toList());
+
+            List<String> documentNames = processedBatch.stream().map(ProcessedImageRecord::getFileName)
+                    .collect(Collectors.toList());
+
+            Map<String, String> umrnMap = processedBatch.stream().collect(Collectors.toMap(
+                    ProcessedImageRecord::getFileName, 
+                    ProcessedImageRecord::getAchUmrn 
+            ));
+            
+            logger.info("Calling EDMS API with " + documents.size() + " documents.");
+            
+            // Note: callEDMSApi method remains unchanged, so just call it
+            callEDMSApi(documents, documentNames, dataBean, umrnMap);
+            
+        } catch (Exception e) {
+            logger.error("Error during scheduled EDMS upload", e);
+        }
+    }
+
+    // ... (Keep callEDMSApi, sendPostRequest, reuseToken, and encodeFileToBase64 exactly as they are)
+}
