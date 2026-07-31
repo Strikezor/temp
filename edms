@@ -1,0 +1,553 @@
+package com.tcs.bancs.microservices.controller;
+
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.sql.SQLException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import javax.crypto.SecretKey;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.sql.rowset.serial.SerialException;
+
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.tcs.bancs.microservices.Encryption.EDMSEncryption;
+import com.tcs.bancs.microservices.config.CacheConfig;
+import com.tcs.bancs.microservices.configuration.PropertyLoader;
+import com.tcs.bancs.microservices.db.model.EDMS_LOGS;
+import com.tcs.bancs.microservices.db.model.ImageRecord;
+import com.tcs.bancs.microservices.repository.EDMS_REPO;
+import com.tcs.bancs.microservices.repository.ProcessedImageRecord;
+import com.tcs.bancs.microservices.request.CommonDataBean;
+import com.tcs.bancs.microservices.request.EDMS_REQ;
+import com.tcs.bancs.microservices.request.RequestBean;
+import com.tcs.bancs.microservices.request.TempReqBean;
+import com.tcs.bancs.microservices.request.UploadDocumentList;
+import com.tcs.bancs.microservices.response.EDMS_Response;
+import com.tcs.bancs.microservices.util.FrameworkConstants;
+import com.tcs.bancs.microservices.utils.ReqRefGenerator;
+import com.tcs.bancs.microservices.utils.SSLUtil;
+
+import oracle.security.crypto.core.DES;
+
+@RestController
+@Controller
+@RequestMapping("/EDMS")
+public class EDMSUpload_Controller {
+	private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSUpload_Controller.class);
+	@Autowired
+	private static EDMS_REPO edms_REPO;
+
+	private static String edmsURL1 = null;
+	private static String hostPublic = null;
+	private static String privateKey_DigISign = null;
+	private static String DocumentPath = null;
+	private static final String CHAR_SET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+	private static final SecureRandom random = new SecureRandom();
+	private static final int LENGTH = 6;
+	private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
+	private static final long MAX_SIZE_BYTES = 30 * 1024 * 1024;
+
+//
+//	@SuppressWarnings("unused")
+	@SuppressWarnings("static-access")
+	public EDMSUpload_Controller(@Value("${EDMS_UPLOAD_URL}") String edmsURL1,
+			@Value("${HOSTpublicKeyPath}") String hostPublic,
+			@Value("${PrivateKey_DigiSign}") String privateKey_DigISign, @Value("${DocumentPath}") String DocumentPath,
+			EDMS_REPO edms_REPO) {
+		this.edmsURL1 = edmsURL1;
+		this.hostPublic = hostPublic;
+		this.privateKey_DigISign = privateKey_DigISign;
+		this.DocumentPath = DocumentPath;
+		this.edms_REPO = edms_REPO;
+	}
+
+	String ErrorCodeMasterFilePath = CacheConfig.frameworkConfigProperties
+			.getProperty(FrameworkConstants.LOOKUP_FILES_PATH);
+
+	Properties error = PropertyLoader
+			.readPropertyFile(new String(ErrorCodeMasterFilePath + "/ErrorCodeMaster.properties"));
+
+	@SuppressWarnings("unused")
+	@PostMapping(value = { "/EDMS_Upload" }, produces = { "application/json" })
+	public ResponseEntity<String> EDMS_Upload(@RequestBody(required = false) EDMS_REQ reqbean,
+			HttpServletRequest request, @RequestHeader HttpHeaders headers, HttpServletResponse response)
+			throws SerialException, SQLException, ParseException, NoSuchProviderException, IOException {
+		
+		logger.info("EDMS Image upload started");
+
+//		String txn_no = "009901";
+//		String txn_name = "ACH BGL Accounts";
+		Gson gson = new Gson();
+		String finalResponse = "";
+		String remoteAddress = request.getRemoteAddr();
+		String tellerNo = new String();
+		String SourceId = "";
+		String ReqRefNo = null;
+
+		DateTimeFormatter entryDate1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss:SSS");
+		LocalDateTime timex = LocalDateTime.now();
+		String entryDate = entryDate1.format(timex);
+		String teller_date = entryDate.replace("-", "").substring(0, 9);
+		String CLIENT_IP = request.getHeader("X-Forwarded-For");
+		EDMS_Response result = new EDMS_Response();
+
+		response.setHeader("X-Content-Type-Options", "nosniff");
+		response.setHeader("X-Frame-Options", "DENY");
+		response.setHeader("Content-Security-Policy", "default-src 'self'");
+		response.setHeader("X-XSS-Protection", "1;mode=block");
+		response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+//		response.setHeader("Access-Control-Allow-Origin", origins);
+		response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+		Date date = new Date();
+		SimpleDateFormat dateFormat = new SimpleDateFormat("dd-MM-yyyy");
+		String uploadDate = dateFormat.format(date);
+		CommonDataBean dataBean = new CommonDataBean();
+
+		dataBean.setCategory("Image");
+		dataBean.setBranchCode("61076");
+		dataBean.setCreationDate(uploadDate);
+		dataBean.setUploadDate(uploadDate);
+		dataBean.setApplicationID("AADESH_CBSDEV");
+
+		List<Object[]> dbRecords = edms_REPO.getImages();
+		if (dbRecords.isEmpty()) {
+			logger.info("No pending records found.");
+			return null;
+		}
+
+		// 2. Build the Map and Set of REQUIRED files only
+		Map<String, String> fileNameToUmrnMap = new HashMap<>();
+		Set<String> requiredFileNames = new HashSet<>();
+
+		for (Object[] record : dbRecords) {
+			String umrn = record[0] != null ? record[0].toString() : null;
+			String img1 = record[1] != null ? record[1].toString() : null;
+			String img2 = record[2] != null ? record[2].toString() : null;
+
+			if (img1 != null && !img1.isEmpty()) {
+				fileNameToUmrnMap.put(img1, umrn);
+				requiredFileNames.add(img1);
+			}
+			if (img2 != null && !img2.isEmpty()) {
+				fileNameToUmrnMap.put(img2, umrn);
+				requiredFileNames.add(img2);
+			}
+		}
+
+		File sourceFolder = new File(DocumentPath);
+
+		FilenameFilter strictFilter = (dir, name) -> requiredFileNames.contains(name);
+
+		File[] listOfDocuments = sourceFolder.listFiles(strictFilter);
+
+		if (listOfDocuments == null || listOfDocuments.length == 0) {
+			logger.info("No matching files found in source folder for the DB records.");
+			for (String fileName : requiredFileNames) {
+		        String umrn = fileNameToUmrnMap.get(fileName);
+		        logger.warn("File not found in source folder: {} (UMRN: {})", fileName, umrn);
+		    }
+			return null;
+		}
+
+		List<ProcessedImageRecord> processedBatch = new ArrayList<>();
+
+		long currentTotalSize = 0;
+
+		// This loop now ONLY sees files that are in the DB
+		for (File document : listOfDocuments) {
+			String fileName = document.getName();
+			
+			 if (edms_REPO.checkImageExist(fileName)) {
+			        logger.info("Skipping already uploaded image (DB check): " + fileName);
+			        continue;
+			    }
+
+			// Double-check safety (redundant due to filter, but safe)
+			if (!fileNameToUmrnMap.containsKey(fileName)) {
+				continue;
+			}
+
+			long fileSize = document.length();
+			if (currentTotalSize + fileSize > MAX_SIZE_BYTES) {
+				logger.info("Max size limit reached.");
+				break;
+			}
+
+			byte[] fileContent = Files.readAllBytes(document.toPath());
+			String base64Doc = Base64.getEncoder().encodeToString(fileContent);
+			String umrn = fileNameToUmrnMap.get(fileName);
+
+			processedBatch.add(new ProcessedImageRecord(umrn, fileName, base64Doc));
+			currentTotalSize += fileSize;
+
+			logger.info("Processing: " + fileName + " (UMRN: " + umrn + ")");
+		}
+
+		if (processedBatch.size() % 2 != 0) {
+			logger.info("Odd count detected, removing last item.");
+			processedBatch.remove(processedBatch.size() - 1);
+		}
+
+		if (processedBatch.isEmpty())
+			return null;
+
+		// 6. Prepare and Call API
+		List<String> documents = processedBatch.stream().map(ProcessedImageRecord::getBase64Content)
+				.collect(Collectors.toList());
+
+		List<String> documentNames = processedBatch.stream().map(ProcessedImageRecord::getFileName)
+				.collect(Collectors.toList());
+
+		Map<String, String> umrnMap = new HashMap<>();
+		umrnMap = processedBatch.stream().collect(Collectors.toMap(ProcessedImageRecord::getFileName, // Key: Image Name
+				ProcessedImageRecord::getAchUmrn // Value: UMRN
+		));
+		
+		
+		logger.info("Calling EDMS API with " + documents.size() + " documents.");
+		EDMSUpload_Controller.callEDMSApi(documents, documentNames, dataBean,umrnMap);
+		
+
+		return null;
+	}
+
+	public static EDMS_Response callEDMSApi(List<String> documents, List<String> documentNames, CommonDataBean dataBean, Map<String, String> umrnMap)
+			throws NoSuchProviderException {
+		String edmsURL = edmsURL1;
+		PublicKey edmsServerPublicKey = null;
+		logger.info("hostPublic    " + hostPublic);
+		edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+
+		String RefNo = ReqRefGenerator.generate("E");
+		String uniqueIdentifier = RefNo;
+
+		String uniqueCBSREPOServerID = EDMSEncryption.generateUniqueServerId();
+		SecretKey aesKey = EDMSEncryption.generateAESkey();
+
+		Gson gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
+
+		RequestBean request = new RequestBean();
+		List<UploadDocumentList> list = new ArrayList<UploadDocumentList>();
+//		UploadDocumentList request1 = new UploadDocumentList();
+
+		int length = documentNames.size();
+		for (int i = 0; i < length; i++) {
+			UploadDocumentList request1 = new UploadDocumentList();
+			request1.setBase64(documents.get(i));
+			request1.setDocumentName(documentNames.get(i));
+			logger.info("Documents" + documentNames.get(i));
+			list.add(request1);
+		}
+
+		logger.info(list.toString());
+		request.setBranchCode(dataBean.getBranchCode());
+		request.setApplicationID("AADESH_CBSDEV");
+		request.setUniqueIdentifier(uniqueIdentifier);
+		request.setDocuments(list);
+		logger.info("DATA OF THE ReQUEST:    " + request.getBranchCode() + " " + request.getApplicationID() + " "
+				+ request.getUniqueIdentifier() + "      " + request.toString());
+		TempReqBean FirstReq = new TempReqBean();
+		FirstReq.setUniqueSourceServerID(uniqueCBSREPOServerID);
+		FirstReq.setApplicationID("AADESH_CBSDEV");
+		String uniqueSourceServerID = gson.toJson(FirstReq);
+
+		String encryptedUniqueSourceServerID = null;
+		encryptedUniqueSourceServerID = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey,
+				uniqueSourceServerID);
+
+		logger.info("AesKey " + aesKey);
+		logger.info("edmsServerPublicKey " + edmsServerPublicKey);
+		logger.info("uniqueSourceServerID " + uniqueSourceServerID);
+		logger.info("encryptedUniqueSourceServerID " + encryptedUniqueSourceServerID);
+
+		logger.info("First request preparation completed. Unique ID: {}", uniqueCBSREPOServerID);
+		logger.info("REQUEST: " + FirstReq.toString());
+
+		try {
+			SSLUtil.turnOffSSLChecking();
+		} catch (NoSuchAlgorithmException e) {
+			logger.error("SSL configuration error - NoSuchAlgorithmException", e);
+			return null;
+		} catch (KeyManagementException e) {
+			logger.error("SSL configuration error - KeyManagementException", e);
+			return null;
+		}
+
+		String responseString = null;
+		logger.info("EDMS call to URL: {}", edmsURL);
+		try {
+			logger.info("--------------------------- First EDMS Call Started ---------------------------");
+			responseString = sendPostRequest(edmsURL, encryptedUniqueSourceServerID, "");
+			logger.info("---------------------------  First EDMS Call Ended  ---------------------------");
+			logger.info("First EDMS call completed successfully. Response length: {} characters",
+					responseString.toString());
+		} catch (Exception e) {
+			logger.error("--------------------------- UNABLE TO FETCH EDMS RESPONSE ---------------------------"
+					+ e.getMessage());
+			logger.error("Failed to complete first EDMS call. Error: {}", e.getMessage(), e);
+			return null;
+		}
+
+		logger.info("Status code for temp response: 200");
+
+		String[] tempResponse = responseString.split(",");
+		String encReceiverAccessToken = tempResponse[0];
+		String signedReceiverTokenHash = tempResponse[1];
+
+		PrivateKey privateKey = null;
+		privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+		String receiverAccessToken = null;
+		receiverAccessToken = EDMSEncryption.decReceiverAccessToken(privateKey, encReceiverAccessToken);
+		String senderTokenHash = null;
+		senderTokenHash = EDMSEncryption.generateSenderTokenHash(receiverAccessToken);
+
+		boolean hashMatched = false;
+		hashMatched = EDMSEncryption.verifyReceiverTokenHash(edmsServerPublicKey, signedReceiverTokenHash,
+				senderTokenHash);
+		if (hashMatched) {
+			String signedSenderTokenHash = null;
+			signedSenderTokenHash = EDMSEncryption.signSenderTokenHash(privateKey, senderTokenHash);
+
+			String signedSenderTokenHashWithID = signedSenderTokenHash + "," + uniqueCBSREPOServerID;
+			signedSenderTokenHashWithID = signedSenderTokenHashWithID.replaceAll("\n", "");
+
+			logger.info("Token verification successful. Proceeding to reuse token.");
+
+			return reuseToken(signedSenderTokenHashWithID, request, gson, edmsURL,umrnMap);
+
+		} else {
+			logger.warn("Token verification failed for unique ID: {}", uniqueCBSREPOServerID);
+		}
+
+		return null;
+	}
+
+	private static String sendPostRequest(String url, String jsonBody, String token) throws IOException {
+		URL obj = new URL(url);
+		HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+
+		con.setRequestMethod("POST");
+		con.setRequestProperty("Content-Type", "application/json");
+		con.setRequestProperty("Accept", "application/json");
+
+		// Set the token header empty only
+		con.setRequestProperty("signedSenderTokenHash", token);
+
+		con.setDoOutput(true);
+		con.setConnectTimeout(15000);
+		con.setReadTimeout(45000);
+
+		logger.debug("Sending POST request to: {} with body size: {} characters", url, jsonBody.length());
+
+		try (OutputStream os = con.getOutputStream()) {
+			byte[] input = jsonBody.getBytes(StandardCharsets.UTF_8);
+			os.write(input, 0, input.length);
+		}
+
+		int responseCode = con.getResponseCode();
+		logger.debug("HTTP Response Code: {}", responseCode);
+
+		if (responseCode != 200) {
+			// Log the response body for debugging 400 errors
+			try (BufferedReader br = new BufferedReader(
+					new InputStreamReader(con.getErrorStream(), StandardCharsets.UTF_8))) {
+				StringBuilder errorResponse = new StringBuilder();
+				String responseLine;
+				while ((responseLine = br.readLine()) != null) {
+					errorResponse.append(responseLine.trim());
+				}
+				logger.error("HTTP Error Response: {}", errorResponse.toString());
+			}
+			throw new IOException("HTTP error code: " + responseCode);
+		}
+
+		try (BufferedReader br = new BufferedReader(
+				new InputStreamReader(con.getInputStream(), StandardCharsets.UTF_8))) {
+			StringBuilder response = new StringBuilder();
+			String responseLine;
+			while ((responseLine = br.readLine()) != null) {
+				response.append(responseLine.trim());
+			}
+			logger.debug("Response received. Size: {} characters", response.toString());
+			return response.toString();
+		}
+	}
+
+	public static EDMS_Response reuseToken(String signedSenderTokenHashWithID, RequestBean request, Gson g,
+			String edmsURL, Map<String, String> umrnMap) throws NoSuchProviderException {
+		Gson gson = null;
+		if (g != null)
+			gson = g;
+		else {
+			gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
+		}
+		logger.info("REEEEE" + request.toString());
+		EDMS_Response finalResponse = new EDMS_Response();
+		String decryptedResponse = null;
+		String finalJSONReq = gson.toJson(request);
+
+		logger.info("final request : {\r\n" + "  \"channelID\":" + " \"" + request.getApplicationID() + "\",\r\n"
+				+ "  \"branchCode\":" + " \"" + request.getBranchCode() + "\",\r\n" + "  \"uniqueIdentifier\":" + " \""
+				+ request.getUniqueIdentifier() + "\",\r\n" + "  \"documents\": [" + "\r\n" + "    {\r\n"
+//				+ "      \"documentName\":" + " \"" + request.getDocuments().get(0).getDocumentName() + "\"\r\n"
+				+ "    }\r\n  ]\r\n}");
+
+		SecretKey aesKey = EDMSEncryption.generateAESkey();
+		PublicKey edmsServerPublicKey = null;
+		edmsServerPublicKey = EDMSEncryption.getPublicKey(hostPublic);
+		;
+
+		String encryptedRequest = null;
+		logger.info("Encrypting final request with AES key: {}", aesKey);
+		logger.info("JSON REQUEST:    " + finalJSONReq);
+		encryptedRequest = EDMSEncryption.encryptRawJSON(aesKey, edmsServerPublicKey, finalJSONReq);
+		logger.info("encrypted Req:   " + encryptedRequest);
+		try {
+			SSLUtil.turnOffSSLChecking();
+		} catch (NoSuchAlgorithmException e) {
+			logger.error("SSL configuration error - NoSuchAlgorithmException", e);
+			return null;
+		} catch (KeyManagementException e) {
+			logger.error("SSL configuration error - KeyManagementException", e);
+			return null;
+		}
+
+		String finalResponseString = null;
+		try {
+			logger.info("--------------------------- Final EDMS Call Started ---------------------------");
+			finalResponseString = sendPostRequest(edmsURL, encryptedRequest, signedSenderTokenHashWithID);
+			logger.info("---------------------------  Final EDMS Call Ended  ---------------------------");
+			logger.info("Final EDMS call completed successfully. Response length: {} characters",
+					finalResponseString.length());
+		} catch (Exception e) {
+			logger.error("--------------------------- UNABLE TO FETCH EDMS RESPONSE ---------------------------"
+					+ e.getMessage());
+			return null;
+		}
+
+		PrivateKey privateKey = null;
+		privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+
+		if (finalResponseString != null && !finalResponseString.isEmpty()) {
+			decryptedResponse = EDMSEncryption.decryptResponse(finalResponseString, privateKey);
+			Map<String, Object> response = new HashMap<>();
+			ObjectMapper mapper = new ObjectMapper();
+			try {
+				response = mapper.readValue(decryptedResponse, new TypeReference<Map<String, Object>>() {
+				});
+			} catch (JsonProcessingException e) {
+				// TODO Auto-generated catch block
+				logger.error(e.getMessage());
+			}
+			logger.info("Final response decrypted. Response size: {} characters", decryptedResponse.length());
+			logger.info("Final decrypted response: {}", decryptedResponse);
+			List<Map<String, Object>> nameIdBeans = (List<Map<String, Object>>) response.get("name_IdBeans");
+			String responseCode = (String) response.get("responseCode");
+			String responseMsg = (String) response.get("responseMsg");
+			String uniqueIdentifier = (String) response.get("uniqueIdentifier");
+
+			for (Map<String, Object> map : nameIdBeans) {
+				if (map.get("uploadResponseCode").equals("00") || map.get("uploadResponseCode").equals("809")) {
+					String path = DocumentPath + "/" + map.get("documentName");
+					Path src = Paths.get(path);
+					logger.info(path);
+					Path desti = Paths.get(destinationPath + "/Success_Files/" + map.get("documentName"));
+					logger.info(desti.toString());
+
+					try {
+						Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+					} catch (IOException e) {
+						// TODO Auto-generated catch block
+						logger.error(e.getMessage());
+					}
+					EDMS_LOGS edmsLogs = new EDMS_LOGS();
+					edmsLogs.setBRANCH_CODE(request.getBranchCode());
+					edmsLogs.setID((String) map.get("documentId"));
+					edmsLogs.setNAME((String) map.get("documentName"));
+					edmsLogs.setRESPONSE_CODE((String) map.get("uploadResponseCode"));
+					edmsLogs.setRESPONSE_MESSAGE((String) map.get("uploadResponse"));
+					edmsLogs.setUNIQUE_IDENTIFIER(uniqueIdentifier);
+					edmsLogs.setUPLOAD_DATE(LocalDate.now());
+					edmsLogs.setFILE_TYPE("Image");
+					edmsLogs.setUMRN(umrnMap.get((String) map.get("documentName")));
+
+					logger.info(edmsLogs.toString());
+					logger.info("JMD " + edms_REPO);
+					edms_REPO.save(edmsLogs);
+				} else {
+					String path = DocumentPath + "/" + map.get("documentName");
+					Path src = Paths.get(path);
+					logger.info(path);
+					Path desti = Paths.get(destinationPath + "/Failure_Files/" + map.get("documentName"));
+					logger.info(desti.toString());
+
+					try {
+						Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+					} catch (IOException e) {
+						// TODO Auto-generated catch block
+						logger.error(e.getMessage());
+					}
+				}
+			}
+
+		}
+		finalResponse = gson.fromJson(decryptedResponse, EDMS_Response.class);
+
+		EDMS_Response dl = finalResponse;
+		logger.info("Processing completed successfully for unique ID: {}",
+				request.getUniqueIdentifier() != null ? request.getUniqueIdentifier() : "unknown");
+
+		return dl;
+	}
+
+	private static String encodeFileToBase64(File file) {
+		try {
+			byte[] fileContent = Files.readAllBytes(file.toPath());
+			return Base64.getEncoder().encodeToString(fileContent);
+		} catch (IOException e) {
+			throw new IllegalStateException("Could not read file " + file, e);
+		}
+	}
+}
