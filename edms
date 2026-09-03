@@ -40,6 +40,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -68,39 +71,54 @@ import com.tcs.bancs.microservices.response.EDMS_Response;
 import com.tcs.bancs.microservices.util.FrameworkConstants;
 import com.tcs.bancs.microservices.utils.ReqRefGenerator;
 import com.tcs.bancs.microservices.utils.SSLUtil;
+import com.tcs.bancs.microservices.DAO.RetryErrorsProp;
 
 import oracle.security.crypto.core.DES;
 
-@RestController
-@Controller
-@RequestMapping("/EDMS")
+@Component
 public class EDMSUpload_Controller {
 	private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSUpload_Controller.class);
 	@Autowired
 	private static EDMS_REPO edms_REPO;
 
+	@Autowired
+	private JdbcTemplate jdbcTemplate;
+
+//	@Autowired
+	private RetryErrorsProp retryErrors;
+
 	private static String edmsURL1 = null;
 	private static String hostPublic = null;
 	private static String privateKey_DigISign = null;
 	private static String DocumentPath = null;
+	private static String getImages = null;
+	private static String MAX_SIZE = null;
+	private static String ApplicationId = null;
+	private static String tellerId = null;
 	private static final String CHAR_SET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 	private static final SecureRandom random = new SecureRandom();
 	private static final int LENGTH = 6;
 	private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
-	private static final long MAX_SIZE_BYTES = 30 * 1024 * 1024;
+//	private static final long MAX_SIZE_BYTES = 30 * 1024 * 1024;
 
-//
-//	@SuppressWarnings("unused")
 	@SuppressWarnings("static-access")
 	public EDMSUpload_Controller(@Value("${EDMS_UPLOAD_URL}") String edmsURL1,
 			@Value("${HOSTpublicKeyPath}") String hostPublic,
 			@Value("${PrivateKey_DigiSign}") String privateKey_DigISign, @Value("${DocumentPath}") String DocumentPath,
-			EDMS_REPO edms_REPO) {
+			@Value("${getImages}") String getImages, @Value("${MAX_SIZE}") String MAX_SIZE,
+			@Value("${tellerId}") String tellerId, @Value("${ApplicationId") String ApplicationId, EDMS_REPO edms_REPO,
+			RetryErrorsProp retryErrors) {
+
 		this.edmsURL1 = edmsURL1;
 		this.hostPublic = hostPublic;
 		this.privateKey_DigISign = privateKey_DigISign;
 		this.DocumentPath = DocumentPath;
 		this.edms_REPO = edms_REPO;
+		this.getImages = getImages;
+		this.MAX_SIZE = MAX_SIZE;
+		this.ApplicationId = ApplicationId;
+		this.retryErrors = retryErrors;
+		this.tellerId = tellerId;
 	}
 
 	String ErrorCodeMasterFilePath = CacheConfig.frameworkConfigProperties
@@ -109,152 +127,139 @@ public class EDMSUpload_Controller {
 	Properties error = PropertyLoader
 			.readPropertyFile(new String(ErrorCodeMasterFilePath + "/ErrorCodeMaster.properties"));
 
-	@SuppressWarnings("unused")
-	@PostMapping(value = { "/EDMS_Upload" }, produces = { "application/json" })
-	public ResponseEntity<String> EDMS_Upload(@RequestBody(required = false) EDMS_REQ reqbean,
-			HttpServletRequest request, @RequestHeader HttpHeaders headers, HttpServletResponse response)
-			throws SerialException, SQLException, ParseException, NoSuchProviderException, IOException {
-		
-		logger.info("EDMS Image upload started");
+	@Scheduled(cron = "${edms.upload.cron}")
+	public void executeEDMSUploadTask() {
+		logger.info("Scheduled EDMS Image upload started");
+		try {
 
-//		String txn_no = "009901";
-//		String txn_name = "ACH BGL Accounts";
-		Gson gson = new Gson();
-		String finalResponse = "";
-		String remoteAddress = request.getRemoteAddr();
-		String tellerNo = new String();
-		String SourceId = "";
-		String ReqRefNo = null;
+			Date date = new Date();
+			SimpleDateFormat dateFormat = new SimpleDateFormat("dd-MM-yyyy");
+			String uploadDate = dateFormat.format(date);
 
-		DateTimeFormatter entryDate1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss:SSS");
-		LocalDateTime timex = LocalDateTime.now();
-		String entryDate = entryDate1.format(timex);
-		String teller_date = entryDate.replace("-", "").substring(0, 9);
-		String CLIENT_IP = request.getHeader("X-Forwarded-For");
-		EDMS_Response result = new EDMS_Response();
+			CommonDataBean dataBean = new CommonDataBean();
+			dataBean.setCategory("Image");
+			dataBean.setBranchCode("61076");
+			dataBean.setCreationDate(uploadDate);
+			dataBean.setUploadDate(uploadDate);
+			dataBean.setApplicationID(ApplicationId);
+			dataBean.setTellerId(tellerId);
 
-		response.setHeader("X-Content-Type-Options", "nosniff");
-		response.setHeader("X-Frame-Options", "DENY");
-		response.setHeader("Content-Security-Policy", "default-src 'self'");
-		response.setHeader("X-XSS-Protection", "1;mode=block");
-		response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
-//		response.setHeader("Access-Control-Allow-Origin", origins);
-		response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-		Date date = new Date();
-		SimpleDateFormat dateFormat = new SimpleDateFormat("dd-MM-yyyy");
-		String uploadDate = dateFormat.format(date);
-		CommonDataBean dataBean = new CommonDataBean();
+			List<Object[]> dbRecords = jdbcTemplate.query(getImages, (rs, rowNum) -> {
+				int columnCount = rs.getMetaData().getColumnCount();
+				Object[] row = new Object[columnCount];
+				for (int i = 1; i <= columnCount; i++) {
+					row[i - 1] = rs.getObject(i);
+				}
+				return row;
+			});
 
-		dataBean.setCategory("Image");
-		dataBean.setBranchCode("61076");
-		dataBean.setCreationDate(uploadDate);
-		dataBean.setUploadDate(uploadDate);
-		dataBean.setApplicationID("AADESH_CBSDEV");
-
-		List<Object[]> dbRecords = edms_REPO.getImages();
-		if (dbRecords.isEmpty()) {
-			logger.info("No pending records found.");
-			return null;
-		}
-
-		// 2. Build the Map and Set of REQUIRED files only
-		Map<String, String> fileNameToUmrnMap = new HashMap<>();
-		Set<String> requiredFileNames = new HashSet<>();
-
-		for (Object[] record : dbRecords) {
-			String umrn = record[0] != null ? record[0].toString() : null;
-			String img1 = record[1] != null ? record[1].toString() : null;
-			String img2 = record[2] != null ? record[2].toString() : null;
-
-			if (img1 != null && !img1.isEmpty()) {
-				fileNameToUmrnMap.put(img1, umrn);
-				requiredFileNames.add(img1);
+			if (dbRecords.isEmpty()) {
+				logger.info("No pending records found.");
+				return;
 			}
-			if (img2 != null && !img2.isEmpty()) {
-				fileNameToUmrnMap.put(img2, umrn);
-				requiredFileNames.add(img2);
-			}
-		}
+			Map<String, String> fileNameToUmrnMap = new HashMap<>();
+			Set<String> requiredFileNames = new HashSet<>();
 
-		File sourceFolder = new File(DocumentPath);
+			for (Object[] record : dbRecords) {
+				String umrn = record[0] != null ? record[0].toString() : null;
+				String img1 = record[1] != null ? record[1].toString() : null;
+				String img2 = record[2] != null ? record[2].toString() : null;
 
-		FilenameFilter strictFilter = (dir, name) -> requiredFileNames.contains(name);
-
-		File[] listOfDocuments = sourceFolder.listFiles(strictFilter);
-
-		if (listOfDocuments == null || listOfDocuments.length == 0) {
-			logger.info("No matching files found in source folder for the DB records.");
-			for (String fileName : requiredFileNames) {
-		        String umrn = fileNameToUmrnMap.get(fileName);
-		        logger.warn("File not found in source folder: {} (UMRN: {})", fileName, umrn);
-		    }
-			return null;
-		}
-
-		List<ProcessedImageRecord> processedBatch = new ArrayList<>();
-
-		long currentTotalSize = 0;
-
-		// This loop now ONLY sees files that are in the DB
-		for (File document : listOfDocuments) {
-			String fileName = document.getName();
-			
-			 if (edms_REPO.checkImageExist(fileName)) {
-			        logger.info("Skipping already uploaded image (DB check): " + fileName);
-			        continue;
-			    }
-
-			// Double-check safety (redundant due to filter, but safe)
-			if (!fileNameToUmrnMap.containsKey(fileName)) {
-				continue;
+				if (img1 != null && !img1.isEmpty()) {
+					fileNameToUmrnMap.put(img1, umrn);
+					requiredFileNames.add(img1);
+				}
+				if (img2 != null && !img2.isEmpty()) {
+					fileNameToUmrnMap.put(img2, umrn);
+					requiredFileNames.add(img2);
+				}
 			}
 
-			long fileSize = document.length();
-			if (currentTotalSize + fileSize > MAX_SIZE_BYTES) {
-				logger.info("Max size limit reached.");
-				break;
+			File sourceFolder = new File(DocumentPath);
+			FilenameFilter strictFilter = (dir, name) -> requiredFileNames.contains(name);
+			File[] listOfDocuments = sourceFolder.listFiles(strictFilter);
+
+			if (listOfDocuments == null || listOfDocuments.length == 0) {
+				logger.info("No matching files found in source folder for the DB records.");
+				for (String fileName : requiredFileNames) {
+					String umrn = fileNameToUmrnMap.get(fileName);
+					logger.warn("File not found in source folder: {} (UMRN: {})", fileName, umrn);
+				}
+				return;
 			}
 
-			byte[] fileContent = Files.readAllBytes(document.toPath());
-			String base64Doc = Base64.getEncoder().encodeToString(fileContent);
-			String umrn = fileNameToUmrnMap.get(fileName);
+			List<ProcessedImageRecord> processedBatch = new ArrayList<>();
+			long currentTotalSize = 0;
 
-			processedBatch.add(new ProcessedImageRecord(umrn, fileName, base64Doc));
-			currentTotalSize += fileSize;
+			for (File document : listOfDocuments) {
+				String fileName = document.getName();
 
-			logger.info("Processing: " + fileName + " (UMRN: " + umrn + ")");
+				if (edms_REPO.checkImageExist(fileName)) {
+					logger.info("Skipping already uploaded image (DB check): " + fileName);
+					String path = DocumentPath + "/" + fileName;
+					Path src = Paths.get(path);
+					logger.info(path);
+					Path desti = Paths.get(destinationPath + "/Failure_Files/" + fileName);
+					logger.info(desti.toString());
+
+					try {
+						Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+					} catch (IOException e) {
+						logger.error(e.getMessage());
+					}
+
+					continue;
+				}
+
+				if (!fileNameToUmrnMap.containsKey(fileName)) {
+					continue;
+				}
+
+				long fileSize = document.length();
+				long MAX_SIZE_BYTES = Long.parseLong(MAX_SIZE);
+				if (currentTotalSize + fileSize > MAX_SIZE_BYTES) {
+					logger.info("Max size limit reached.");
+					break;
+				}
+
+				byte[] fileContent = Files.readAllBytes(document.toPath());
+				String base64Doc = Base64.getEncoder().encodeToString(fileContent);
+				String umrn = fileNameToUmrnMap.get(fileName);
+
+				processedBatch.add(new ProcessedImageRecord(umrn, fileName, base64Doc));
+				currentTotalSize += fileSize;
+
+				logger.info("Processing: " + fileName + " (UMRN: " + umrn + ")");
+			}
+
+			if (processedBatch.size() % 2 != 0) {
+				logger.info("Odd count detected, removing last item.");
+				processedBatch.remove(processedBatch.size() - 1);
+			}
+
+			if (processedBatch.isEmpty())
+				return;
+
+			List<String> documents = processedBatch.stream().map(ProcessedImageRecord::getBase64Content)
+					.collect(Collectors.toList());
+
+			List<String> documentNames = processedBatch.stream().map(ProcessedImageRecord::getFileName)
+					.collect(Collectors.toList());
+
+			Map<String, String> umrnMap = processedBatch.stream()
+					.collect(Collectors.toMap(ProcessedImageRecord::getFileName, ProcessedImageRecord::getAchUmrn));
+
+			logger.info("Calling EDMS API with " + documents.size() + " documents.");
+
+			callEDMSApi(documents, documentNames, dataBean, umrnMap);
+
+		} catch (Exception e) {
+			logger.error("Error during scheduled EDMS upload", e);
 		}
-
-		if (processedBatch.size() % 2 != 0) {
-			logger.info("Odd count detected, removing last item.");
-			processedBatch.remove(processedBatch.size() - 1);
-		}
-
-		if (processedBatch.isEmpty())
-			return null;
-
-		// 6. Prepare and Call API
-		List<String> documents = processedBatch.stream().map(ProcessedImageRecord::getBase64Content)
-				.collect(Collectors.toList());
-
-		List<String> documentNames = processedBatch.stream().map(ProcessedImageRecord::getFileName)
-				.collect(Collectors.toList());
-
-		Map<String, String> umrnMap = new HashMap<>();
-		umrnMap = processedBatch.stream().collect(Collectors.toMap(ProcessedImageRecord::getFileName, // Key: Image Name
-				ProcessedImageRecord::getAchUmrn // Value: UMRN
-		));
-		
-		
-		logger.info("Calling EDMS API with " + documents.size() + " documents.");
-		EDMSUpload_Controller.callEDMSApi(documents, documentNames, dataBean,umrnMap);
-		
-
-		return null;
 	}
 
-	public static EDMS_Response callEDMSApi(List<String> documents, List<String> documentNames, CommonDataBean dataBean, Map<String, String> umrnMap)
-			throws NoSuchProviderException {
+	public EDMS_Response callEDMSApi(List<String> documents, List<String> documentNames, CommonDataBean dataBean,
+			Map<String, String> umrnMap) throws NoSuchProviderException {
 		String edmsURL = edmsURL1;
 		PublicKey edmsServerPublicKey = null;
 		logger.info("hostPublic    " + hostPublic);
@@ -270,7 +275,6 @@ public class EDMSUpload_Controller {
 
 		RequestBean request = new RequestBean();
 		List<UploadDocumentList> list = new ArrayList<UploadDocumentList>();
-//		UploadDocumentList request1 = new UploadDocumentList();
 
 		int length = documentNames.size();
 		for (int i = 0; i < length; i++) {
@@ -286,7 +290,7 @@ public class EDMSUpload_Controller {
 		request.setApplicationID("AADESH_CBSDEV");
 		request.setUniqueIdentifier(uniqueIdentifier);
 		request.setDocuments(list);
-		logger.info("DATA OF THE ReQUEST:    " + request.getBranchCode() + " " + request.getApplicationID() + " "
+		logger.info("DATA OF THE REQUEST:    " + request.getBranchCode() + " " + request.getApplicationID() + " "
 				+ request.getUniqueIdentifier() + "      " + request.toString());
 		TempReqBean FirstReq = new TempReqBean();
 		FirstReq.setUniqueSourceServerID(uniqueCBSREPOServerID);
@@ -336,43 +340,45 @@ public class EDMSUpload_Controller {
 		String encReceiverAccessToken = tempResponse[0];
 		String signedReceiverTokenHash = tempResponse[1];
 
-		PrivateKey privateKey = null;
-		privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
-		String receiverAccessToken = null;
-		receiverAccessToken = EDMSEncryption.decReceiverAccessToken(privateKey, encReceiverAccessToken);
-		String senderTokenHash = null;
-		senderTokenHash = EDMSEncryption.generateSenderTokenHash(receiverAccessToken);
+//		ADDED NOT NULL CONDITION FOR HANDLING CASE WHERE NO RESPONSE IS RECEIVED
+		if (responseString != null) {
+			PrivateKey privateKey = null;
+			privateKey = EDMSEncryption.getPrivateKey(privateKey_DigISign);
+			String receiverAccessToken = null;
+			receiverAccessToken = EDMSEncryption.decReceiverAccessToken(privateKey, encReceiverAccessToken);
+			String senderTokenHash = null;
+			senderTokenHash = EDMSEncryption.generateSenderTokenHash(receiverAccessToken);
 
-		boolean hashMatched = false;
-		hashMatched = EDMSEncryption.verifyReceiverTokenHash(edmsServerPublicKey, signedReceiverTokenHash,
-				senderTokenHash);
-		if (hashMatched) {
-			String signedSenderTokenHash = null;
-			signedSenderTokenHash = EDMSEncryption.signSenderTokenHash(privateKey, senderTokenHash);
+			boolean hashMatched = false;
+			hashMatched = EDMSEncryption.verifyReceiverTokenHash(edmsServerPublicKey, signedReceiverTokenHash,
+					senderTokenHash);
+			if (hashMatched) {
+				String signedSenderTokenHash = null;
+				signedSenderTokenHash = EDMSEncryption.signSenderTokenHash(privateKey, senderTokenHash);
 
-			String signedSenderTokenHashWithID = signedSenderTokenHash + "," + uniqueCBSREPOServerID;
-			signedSenderTokenHashWithID = signedSenderTokenHashWithID.replaceAll("\n", "");
+				String signedSenderTokenHashWithID = signedSenderTokenHash + "," + uniqueCBSREPOServerID;
+				signedSenderTokenHashWithID = signedSenderTokenHashWithID.replaceAll("\n", "");
 
-			logger.info("Token verification successful. Proceeding to reuse token.");
+				logger.info("Token verification successful. Proceeding to reuse token.");
 
-			return reuseToken(signedSenderTokenHashWithID, request, gson, edmsURL,umrnMap);
+				return reuseToken(signedSenderTokenHashWithID, request, gson, edmsURL, umrnMap,dataBean.getTellerId());
 
-		} else {
-			logger.warn("Token verification failed for unique ID: {}", uniqueCBSREPOServerID);
+			} else {
+				logger.warn("Token verification failed for unique ID: {}", uniqueCBSREPOServerID);
+				logger.warn("Re-Trigger in Process for: " + request.toString());
+				return callEDMSApi(documents, documentNames, dataBean, umrnMap);
+			}
 		}
-
 		return null;
 	}
 
-	private static String sendPostRequest(String url, String jsonBody, String token) throws IOException {
+	private String sendPostRequest(String url, String jsonBody, String token) throws IOException {
 		URL obj = new URL(url);
 		HttpURLConnection con = (HttpURLConnection) obj.openConnection();
 
 		con.setRequestMethod("POST");
 		con.setRequestProperty("Content-Type", "application/json");
 		con.setRequestProperty("Accept", "application/json");
-
-		// Set the token header empty only
 		con.setRequestProperty("signedSenderTokenHash", token);
 
 		con.setDoOutput(true);
@@ -390,7 +396,6 @@ public class EDMSUpload_Controller {
 		logger.debug("HTTP Response Code: {}", responseCode);
 
 		if (responseCode != 200) {
-			// Log the response body for debugging 400 errors
 			try (BufferedReader br = new BufferedReader(
 					new InputStreamReader(con.getErrorStream(), StandardCharsets.UTF_8))) {
 				StringBuilder errorResponse = new StringBuilder();
@@ -415,15 +420,15 @@ public class EDMSUpload_Controller {
 		}
 	}
 
-	public static EDMS_Response reuseToken(String signedSenderTokenHashWithID, RequestBean request, Gson g,
-			String edmsURL, Map<String, String> umrnMap) throws NoSuchProviderException {
+	public EDMS_Response reuseToken(String signedSenderTokenHashWithID, RequestBean request, Gson g, String edmsURL,
+			Map<String, String> umrnMap,String telrId) throws NoSuchProviderException {
 		Gson gson = null;
 		if (g != null)
 			gson = g;
 		else {
 			gson = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create();
 		}
-		logger.info("REEEEE" + request.toString());
+		logger.info("Request" + request.toString());
 		EDMS_Response finalResponse = new EDMS_Response();
 		String decryptedResponse = null;
 		String finalJSONReq = gson.toJson(request);
@@ -478,7 +483,6 @@ public class EDMSUpload_Controller {
 				response = mapper.readValue(decryptedResponse, new TypeReference<Map<String, Object>>() {
 				});
 			} catch (JsonProcessingException e) {
-				// TODO Auto-generated catch block
 				logger.error(e.getMessage());
 			}
 			logger.info("Final response decrypted. Response size: {} characters", decryptedResponse.length());
@@ -489,7 +493,8 @@ public class EDMSUpload_Controller {
 			String uniqueIdentifier = (String) response.get("uniqueIdentifier");
 
 			for (Map<String, Object> map : nameIdBeans) {
-				if (map.get("uploadResponseCode").equals("00") || map.get("uploadResponseCode").equals("809")) {
+				if (map.get("uploadResponseCode").equals("00")
+				) {
 					String path = DocumentPath + "/" + map.get("documentName");
 					Path src = Paths.get(path);
 					logger.info(path);
@@ -499,7 +504,6 @@ public class EDMSUpload_Controller {
 					try {
 						Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
 					} catch (IOException e) {
-						// TODO Auto-generated catch block
 						logger.error(e.getMessage());
 					}
 					EDMS_LOGS edmsLogs = new EDMS_LOGS();
@@ -510,11 +514,39 @@ public class EDMSUpload_Controller {
 					edmsLogs.setRESPONSE_MESSAGE((String) map.get("uploadResponse"));
 					edmsLogs.setUNIQUE_IDENTIFIER(uniqueIdentifier);
 					edmsLogs.setUPLOAD_DATE(LocalDate.now());
-					edmsLogs.setFILE_TYPE("Image");
+					edmsLogs.setACTION("C");
 					edmsLogs.setUMRN(umrnMap.get((String) map.get("documentName")));
+					edmsLogs.setTELLER_ID(telrId);
+					edmsLogs.setSTATUS("A");
 
-					logger.info(edmsLogs.toString());
-					logger.info("JMD " + edms_REPO);
+					edms_REPO.save(edmsLogs);
+				}
+//				Condition where files are moved to retry folder
+				else if (retryErrors.getErrors().getOrDefault(map.get("uploadResponseCode"), "0").equals("1")) {
+					String path = DocumentPath + "/" + map.get("documentName");
+					Path src = Paths.get(path);
+					logger.info(path);
+					Path desti = Paths.get(destinationPath + "/Retry_Files/" + map.get("documentName"));
+					logger.info(desti.toString());
+
+					try {
+						Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+					} catch (IOException e) {
+						logger.error(e.getMessage());
+					}
+					EDMS_LOGS edmsLogs = new EDMS_LOGS();
+					edmsLogs.setBRANCH_CODE(request.getBranchCode());
+					edmsLogs.setID("000000000000");
+					edmsLogs.setNAME((String) map.get("documentName"));
+					edmsLogs.setRESPONSE_CODE((String) map.get("uploadResponseCode"));
+					edmsLogs.setRESPONSE_MESSAGE((String) map.get("uploadResponse"));
+					edmsLogs.setUNIQUE_IDENTIFIER(uniqueIdentifier);
+					edmsLogs.setUPLOAD_DATE(LocalDate.now());
+					edmsLogs.setACTION("C");
+					edmsLogs.setUMRN(umrnMap.get((String) map.get("documentName")));
+					edmsLogs.setTELLER_ID(telrId);
+					edmsLogs.setSTATUS("A");
+
 					edms_REPO.save(edmsLogs);
 				} else {
 					String path = DocumentPath + "/" + map.get("documentName");
@@ -526,9 +558,22 @@ public class EDMSUpload_Controller {
 					try {
 						Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
 					} catch (IOException e) {
-						// TODO Auto-generated catch block
 						logger.error(e.getMessage());
 					}
+					EDMS_LOGS edmsLogs = new EDMS_LOGS();
+					edmsLogs.setBRANCH_CODE(request.getBranchCode());
+					edmsLogs.setID("000000000000"); // documentId
+					edmsLogs.setNAME((String) map.get("documentName"));
+					edmsLogs.setRESPONSE_CODE((String) map.get("uploadResponseCode"));
+					edmsLogs.setRESPONSE_MESSAGE((String) map.get("uploadResponse"));
+					edmsLogs.setUNIQUE_IDENTIFIER(uniqueIdentifier);
+					edmsLogs.setUPLOAD_DATE(LocalDate.now());
+					edmsLogs.setACTION("C");
+					edmsLogs.setUMRN(umrnMap.get((String) map.get("documentName")));
+					edmsLogs.setTELLER_ID(telrId);
+					edmsLogs.setSTATUS("A");
+
+					edms_REPO.save(edmsLogs);
 				}
 			}
 
@@ -550,155 +595,4 @@ public class EDMSUpload_Controller {
 			throw new IllegalStateException("Could not read file " + file, e);
 		}
 	}
-}
-
-
-
-
-
-package com.tcs.bancs.microservices.controller;
-
-// ... (keep your existing imports)
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
-
-// Change to Component as this is now a background job, not a web controller
-@Component
-public class EDMSUpload_Scheduler {
-    
-    private static final org.slf4j.Logger logger = LoggerFactory.getLogger(EDMSUpload_Scheduler.class);
-    
-    @Autowired
-    private static EDMS_REPO edms_REPO;
-
-    private static String edmsURL1 = null;
-    private static String hostPublic = null;
-    private static String privateKey_DigISign = null;
-    private static String DocumentPath = null;
-    private static final long MAX_SIZE_BYTES = 30 * 1024 * 1024;
-    private static String destinationPath = System.getProperty("ChannelsPropConfigPath");
-    
-    // ... (Keep your existing constructor and property initializations)
-    
-    // Use the cron expression from your properties file
-    @Scheduled(cron = "${edms.upload.cron}")
-    public void executeEDMSUploadTask() {
-        logger.info("Scheduled EDMS Image upload started");
-
-        try {
-            // Replaced HTTP request specific date handling with standard local variables
-            DateTimeFormatter entryDate1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss:SSS");
-            LocalDateTime timex = LocalDateTime.now();
-            String entryDate = entryDate1.format(timex);
-            String teller_date = entryDate.replace("-", "").substring(0, 9);
-            
-            Date date = new Date();
-            SimpleDateFormat dateFormat = new SimpleDateFormat("dd-MM-yyyy");
-            String uploadDate = dateFormat.format(date);
-            
-            CommonDataBean dataBean = new CommonDataBean();
-            dataBean.setCategory("Image");
-            dataBean.setBranchCode("61076");
-            dataBean.setCreationDate(uploadDate);
-            dataBean.setUploadDate(uploadDate);
-            dataBean.setApplicationID("AADESH_CBSDEV");
-
-            List<Object[]> dbRecords = edms_REPO.getImages();
-            if (dbRecords.isEmpty()) {
-                logger.info("No pending records found.");
-                return;
-            }
-
-            // Build the Map and Set of REQUIRED files only
-            Map<String, String> fileNameToUmrnMap = new HashMap<>();
-            Set<String> requiredFileNames = new HashSet<>();
-
-            for (Object[] record : dbRecords) {
-                String umrn = record[0] != null ? record[0].toString() : null;
-                String img1 = record[1] != null ? record[1].toString() : null;
-                String img2 = record[2] != null ? record[2].toString() : null;
-
-                if (img1 != null && !img1.isEmpty()) {
-                    fileNameToUmrnMap.put(img1, umrn);
-                    requiredFileNames.add(img1);
-                }
-                if (img2 != null && !img2.isEmpty()) {
-                    fileNameToUmrnMap.put(img2, umrn);
-                    requiredFileNames.add(img2);
-                }
-            }
-
-            File sourceFolder = new File(DocumentPath);
-            FilenameFilter strictFilter = (dir, name) -> requiredFileNames.contains(name);
-            File[] listOfDocuments = sourceFolder.listFiles(strictFilter);
-
-            if (listOfDocuments == null || listOfDocuments.length == 0) {
-                logger.info("No matching files found in source folder for the DB records.");
-                for (String fileName : requiredFileNames) {
-                    String umrn = fileNameToUmrnMap.get(fileName);
-                    logger.warn("File not found in source folder: {} (UMRN: {})", fileName, umrn);
-                }
-                return;
-            }
-
-            List<ProcessedImageRecord> processedBatch = new ArrayList<>();
-            long currentTotalSize = 0;
-
-            for (File document : listOfDocuments) {
-                String fileName = document.getName();
-                
-                 if (edms_REPO.checkImageExist(fileName)) {
-                        logger.info("Skipping already uploaded image (DB check): " + fileName);
-                        continue;
-                    }
-
-                if (!fileNameToUmrnMap.containsKey(fileName)) {
-                    continue;
-                }
-
-                long fileSize = document.length();
-                if (currentTotalSize + fileSize > MAX_SIZE_BYTES) {
-                    logger.info("Max size limit reached.");
-                    break;
-                }
-
-                byte[] fileContent = Files.readAllBytes(document.toPath());
-                String base64Doc = Base64.getEncoder().encodeToString(fileContent);
-                String umrn = fileNameToUmrnMap.get(fileName);
-
-                processedBatch.add(new ProcessedImageRecord(umrn, fileName, base64Doc));
-                currentTotalSize += fileSize;
-
-                logger.info("Processing: " + fileName + " (UMRN: " + umrn + ")");
-            }
-
-            if (processedBatch.size() % 2 != 0) {
-                logger.info("Odd count detected, removing last item.");
-                processedBatch.remove(processedBatch.size() - 1);
-            }
-
-            if (processedBatch.isEmpty()) return;
-
-            List<String> documents = processedBatch.stream().map(ProcessedImageRecord::getBase64Content)
-                    .collect(Collectors.toList());
-
-            List<String> documentNames = processedBatch.stream().map(ProcessedImageRecord::getFileName)
-                    .collect(Collectors.toList());
-
-            Map<String, String> umrnMap = processedBatch.stream().collect(Collectors.toMap(
-                    ProcessedImageRecord::getFileName, 
-                    ProcessedImageRecord::getAchUmrn 
-            ));
-            
-            logger.info("Calling EDMS API with " + documents.size() + " documents.");
-            
-            // Note: callEDMSApi method remains unchanged, so just call it
-            callEDMSApi(documents, documentNames, dataBean, umrnMap);
-            
-        } catch (Exception e) {
-            logger.error("Error during scheduled EDMS upload", e);
-        }
-    }
-
-    // ... (Keep callEDMSApi, sendPostRequest, reuseToken, and encodeFileToBase64 exactly as they are)
 }
