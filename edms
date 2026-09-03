@@ -596,3 +596,89 @@ public class EDMSUpload_Controller {
 		}
 	}
 }
+
+
+
+
+            long MAX_SIZE_BYTES = Long.parseLong(MAX_SIZE);
+            List<ProcessedImageRecord> processedBatch = new ArrayList<>();
+            long currentTotalSize = 0;
+
+            for (File document : listOfDocuments) {
+                String fileName = document.getName();
+
+                if (edms_REPO.checkImageExist(fileName)) {
+                    logger.info("Skipping already uploaded image (DB check): " + fileName);
+                    Path src = Paths.get(DocumentPath, fileName);
+                    Path desti = Paths.get(destinationPath, "Failure_Files", fileName);
+                    try {
+                        Files.move(src, desti, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (IOException e) {
+                        logger.error("Error moving skipped file: " + e.getMessage());
+                    }
+                    continue;
+                }
+
+                if (!fileNameToUmrnMap.containsKey(fileName)) {
+                    continue;
+                }
+
+                long fileSize = document.length();
+
+                // If adding this file exceeds the limit, dispatch current batch first
+                if (currentTotalSize + fileSize > MAX_SIZE_BYTES && !processedBatch.isEmpty()) {
+                    logger.info("Batch size threshold reached. Triggering API for current batch.");
+                    dispatchBatch(processedBatch, dataBean);
+                    
+                    // Reset batch container and size counter for the remaining files
+                    processedBatch.clear();
+                    currentTotalSize = 0;
+                }
+
+                byte[] fileContent = Files.readAllBytes(document.toPath());
+                String base64Doc = Base64.getEncoder().encodeToString(fileContent);
+                String umrn = fileNameToUmrnMap.get(fileName);
+
+                processedBatch.add(new ProcessedImageRecord(umrn, fileName, base64Doc));
+                currentTotalSize += fileSize;
+                logger.info("Processing: " + fileName + " (UMRN: " + umrn + ")");
+            }
+
+            // Dispatch any remaining records after finishing the loop
+            if (!processedBatch.isEmpty()) {
+                logger.info("Triggering API for final batch.");
+                dispatchBatch(processedBatch, dataBean);
+            }
+
+
+
+
+
+    private void dispatchBatch(List<ProcessedImageRecord> processedBatch, CommonDataBean dataBean) {
+        if (processedBatch.size() % 2 != 0) {
+            logger.info("Odd count detected, removing last item to maintain pair balance.");
+            processedBatch.remove(processedBatch.size() - 1);
+        }
+
+        if (processedBatch.isEmpty()) {
+            return;
+        }
+
+        List<String> documents = processedBatch.stream()
+                .map(ProcessedImageRecord::getBase64Content)
+                .collect(Collectors.toList());
+
+        List<String> documentNames = processedBatch.stream()
+                .map(ProcessedImageRecord::getFileName)
+                .collect(Collectors.toList());
+
+        Map<String, String> umrnMap = processedBatch.stream()
+                .collect(Collectors.toMap(ProcessedImageRecord::getFileName, ProcessedImageRecord::getAchUmrn));
+
+        logger.info("Calling EDMS API with " + documents.size() + " documents.");
+        try {
+            callEDMSApi(documents, documentNames, dataBean, umrnMap);
+        } catch (NoSuchProviderException e) {
+            logger.error("Error calling EDMS API for batch", e);
+        }
+    }
