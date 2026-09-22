@@ -1,0 +1,218 @@
+Host - to - Host 
+Automated Solution
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 2 of 9
+Documents Details
+Document History
+Prepared By: Date
+NACH Technology 28/08/2014
+Reviewed By: Date
+Approved By: Date
+Author NACH Technology
+Published Date 28/08/2014
+Version V 1.0
+Total Page number
+Document classification Public
+Date Version Change
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 3 of 9
+Table of Contents
+1.0 Current NACH Process............................................................ 4
+1.1 NACH File Flow ..............................................................................4
+1.2 Bank End Activities ........................................................................4
+2.0 Host – to – Host Automated Solution........................................... 5
+2.1 Process for automatic transfer of files to NACH (INP/RTN) ..........................5
+2.2 Process for automatic transfer of files from NACH (INW/RES).......................5
+2.3 Other Functionalities which can be added to the Client Solution ...................5
+2.4 Advantages of Host to Host Automated Solution .......................................5
+3.0 Automated file transfer model through SFTP ............................... 6
+3.1 Security Features ...........................................................................6
+3.2 Folder Structure for SFTP..................................................................6
+3.3 Connection to be opened ..................................................................7
+3.4 Setting to be done at Bank End...........................................................7
+4.0 Bank Actionable ................................................................... 8
+5.0 Checklist for Banks ............................................................... 9
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 4 of 9
+1.0 Current NACH Process
+1.1 NACH File Flow
+NACH file flow involves two parties namely Sponsor Bank and Destination Bank. Sponsor Bank 
+initiates a credit / debit transaction to a Destination Bank.
+There are four legs to the file flow - Input files (INP) uploaded by Sponsor bank, Inward files 
+(INW) received by Destination bank, Return files (RTN) uploaded by Destination bank and 
+Response files (RES) received by Sponsor bank.
+1.2 Bank End Activities
+Following are the manual activities done by the bank
+ Signing and Unsigning of files
+ Uploading and Downloading of files from NACH
+ Authorising each file in NACH
+ Monitoring the ACK files 
+ Voucher posting in CBS
+ Reconciliation
+ Split the INP files if it is of huge size
+ Merge the INW files if required
+INP INW
+RES RTN
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 5 of 9
+2.0 Host – to – Host Automated Solution
+To overcome the above said manual activities and handle volume there is a need to implement a 
+client solution at bank end with the following proposed functionality
+ End to End automation
+ Auto split and merge based on the NPCI set limit
+ Auto signing and Unsigning
+ Seamless file transfer
+2.1 Process for automatic transfer of files to NACH (INP/RTN)
+File of any size will be uploaded to the client side solution. If the file size is greater than the 
+specified limit, then the solution will split the file automatically. While splitting, the split files’ 
+details and their corresponding data will be stored.
+Then the solution will automatically sign the split files and push into NACH through H2H.
+Authorization of files at NACH will not be required using this model.
+ACK for split files will be automatically pulled by the client solution and user will be alerted in 
+case of any negative acknowledgement.
+2.2 Process for automatic transfer of files from NACH (INW/RES)
+The solution will pull and unsign the Inward/Response Files. If required, then the bank can 
+combine the split response files using the solution.
+2.3 Other Functionalities which can be added to the Client Solution
+ Technical Validations at the banks end, so that the rejects at NACH will be minimized
+ Converting Text files to XML and vice-versa, it will be useful if XML file format is 
+mandated. 
+ Convert the file given by corporate to NACH acceptable format
+ Generate response to corporate in corporate file format if required
+ Generate CBS uploaded file for Voucher posting
+ Provide Reconciliation report as per the banks internal requirement
+ Generate MIS at the bank end itself
+ Handle all NACH files formats and functionality like bank extension, cancelation of file, 
+etc
+ Integrate with MMS (Mandate Management System) of NACH
+This client solution will be customisable as per the banks requirement, load and environment. 
+2.4 Advantages of Host to Host Automated Solution
+ Seamless End to End Automation
+ Handling of Huge Volumes
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 6 of 9
+ Reduces human intervention
+ Increases operational convenience and transparency for Banks
+ Customizable as per bank’s requirement
+ Can be extended to other products like MMS and DMS, if required
+3.0 Automated file transfer model through SFTP
+This alternative way of automatically uploading and downloading files into NACH application 
+uses standard Secure File Transfer Protocol (SFTP) for secure end-to-end file transfer. 
+This results in lower manual intervention with higher process automation. Bank server will 
+connect to NPCI server and PUT signed files into the system and GET processed signed files from 
+the assigned folders using SFTP.
+3.1 Security Features
+This solution uses SFTP, a network protocol designed to provide secure file transfer and 
+manipulation facilities over SSH. 
+SFTP server adapter will be configured at the NACH server end to facilitate SFTP with the banks 
+which will act as SFTP client. Authentication for SSH/SFTP connections is performed by the 
+exchange of session keys for the server (NACH system) and the client solution. This assures that 
+both parties know who they are exchanging data with. 
+Sequence of events for connecting & authentication for host to host communication will be as 
+follows:
+1. Client will issue a request for connection to the server.
+2. Server will respond with host signature. The client can match the host key provided 
+separately when establishing the connection to verify the server.
+3.2 Folder Structure for SFTP
+ Files to be uploaded from bank (INP & RTN) will be in the root directory (“/”)
+ Once a bank uploads a file in the root directory, NPCI server will immediately pick up 
+and process the file
+ ACK & SFG Error messages can be downloaded from folder: “/Inbox”
+ INW & RES files will be available for the bank in a folder with the bank’s short code. 
+Example: For XYZ Bank, INW & RES files for that bank will be available in a folder called 
+“/XYZB”
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 7 of 9
+3.3 Connection to be opened
+NACH UAT Host to Host Connection (Available at NPCINET):
+Natted IP Address Port Server Name Comments
+192.168.179.243 9131 NACH UAT-SFG
+Server to Server connection will
+take place through this IP and SFTP
+port (9131)
+NACH Production Host to Host Connection 
+NACH Production Host to Host Connection (Bank coming through NPCInet)
+Natted IP Address Server Name Port Comments
+192.168.179.233 NACH PR SFG 9293 For PR site
+192.168.179.234 NACH HA-SFG 9293 For HA site
+192.168.171.228 NACH DR-SFG 9293 For DR site
+NACH Production Host to Host Connection - (Bank coming though INTERNET)
+Natted IP Address Server Name Port Comments
+103.14.161.35 NACH PR SFG 9293 For PR site
+103.14.161.135 NACH HA-SFG 9293 For HA site
+103.14.160.35 NACH DR-SFG 9293 For DR site
+Banks can connect using DNS name as nachh2h.npci.org.in.
+3.4 Setting to be done at Bank End
+Setting to be done at Bank End
+Step-1:
+1. RUN- CMD
+2. Netsh interface ipv4 show subinterfaces
+3. Check MTU value
+4. If Value 1500 go to step -2
+Step-2:
+To set the MTU size for the network interface, follow these steps:
+1. Click Start, click Run, type regedit, and then click OK.
+2. Locate the following key in the registry: 
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 8 of 9
+a. HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Inte
+rfaces\<ID for network interface>
+3. On the Edit menu, point to New, and then click DWORD Value.
+4. Type MTU, and then press ENTER.
+5. On the Edit menu, click Modify.
+6. In the Value data box, type the value of the MTU size, and then click OK. 
+a. Value: 1300
+Base: Decimal
+or value: 514
+Base: Hexadecimal
+7. Quit Registry Editor.
+8. Restart the computer.
+9. Restart the System
+Again to do step-1 for checking MTU value
+4.0 Bank Actionable
+ Implementation of H2H Automated Solution
+ Integration of H2H solution with Bank CBS 
+ Share IP with NPCI team for opening the required connections
+ Opening the required connection and ports from Bank end
+ Class3 certificate from IDRBT for digital signing
+ Banks need to generate public-private Key pair at their end and share the Public key to 
+NPCI team
+Host – to – Host Automated Solution
+ 
+National Payments Corporation of India [Type of Document: Public] Page 9 of 9
+5.0 Checklist for Banks
+Step Description Status
+1 Received an overview on Host to Host from NPCI team
+2
+Share the NPCInet IP/Static Public IP to be used for H2H test run to
+NPCI team
+3 Open the necessary connection.
+4 Decide an SFTP client to be used for H2H test run
+5
+Some mandatory Setting to be done at Bank end. Steps shared in 
+Section 3.5
+6 First round of testing completed in NACH UAT
+7 Generate SSH key pair and share Public key with NPCI for test run
+8 Get Public key of NACH system from NPCI team.
+9
+Second round of testing in UAT by logging through using ID,
+Password and Private key
+10 Once successful H2H test run is done, work on automation of signing 
+and PUT/GET to/from NACH SFTP server
+11 Share the NPCInet IP to NPCI team which will be used for Production
+run and also send a request for creation of H2H user 
+12 Open the necessary connection.
+13 Setup the server and in-house application to be used for SFTP
+Communication
+14 Generate SSH key pair and share Public key with NPCI for
+Production run
+15 Complete a test run in production server by uploading a UID Status 
+file or a Mapper file
+16 NACH Host to Host goes live
