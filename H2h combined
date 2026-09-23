@@ -1,0 +1,270 @@
+package com.tcs.h2h.launcher;
+
+import com.tcs.h2h.main.H2HMain;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public class H2HLauncher {
+
+    public static void main(String[] args) {
+        // --- System Configurations ---
+        String privateKey = "/app/security/bank_private_key.pem";
+        String nachUserId = "YOUR_BANK_H2H_ID";
+        
+        // --- Local Directory Configurations ---
+        String localOutboundDirectory = "/app/data/outbound/";
+        String processedDirectory = "/app/data/processed/";
+        String localInboxDirectory = "/app/data/inbound/inbox/"; 
+        String localInwResDirectory = "/app/data/inbound/inw_res/"; 
+        
+        // --- Remote NACH Directory Configurations ---
+        // Replace 'XYZB' with your bank's actual short code as assigned by NPCI[span_0](start_span)[span_0](end_span)
+        String bankShortCodeFolder = "/XYZB"; 
+
+        // Ensure all local directories exist before polling starts
+        new File(processedDirectory).mkdirs();
+        new File(localInboxDirectory).mkdirs();
+        new File(localInwResDirectory).mkdirs();
+
+        H2HMain processor = new H2HMain(privateKey, nachUserId);
+
+        // --- TASK 1: OUTBOUND FILE UPLOADER ---
+        Runnable fileUploadTask = () -> {
+            System.out.println("--- Scanning for OUTBOUND files in: " + localOutboundDirectory + " ---");
+            File dir = new File(localOutboundDirectory);
+            File[] filesToProcess = dir.listFiles();
+
+            if (filesToProcess != null && filesToProcess.length > 0) {
+                for (File file : filesToProcess) {
+                    if (file.isFile()) {
+                        String localFilePath = file.getAbsolutePath();
+                        String remoteFileName = file.getName();
+                        
+                        // Attempt to upload the file to the NACH root directory[span_1](start_span)[span_1](end_span)
+                        if (processor.sendFileToNACH(localFilePath, remoteFileName)) {
+                            try {
+                                Path source = file.toPath();
+                                Path destination = new File(processedDirectory + remoteFileName).toPath();
+                                Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING);
+                                System.out.println("Moved " + remoteFileName + " to processed directory.");
+                            } catch (Exception e) {
+                                System.err.println("Failed to move processed file: " + e.getMessage());
+                            }
+                        }
+                    }
+                }
+            } else {
+                System.out.println("No new outbound records found.");
+            }
+        };
+
+        // --- TASK 2: INBOUND FILE DOWNLOADER ---
+        Runnable fileDownloadTask = () -> {
+            System.out.println("--- Scanning NACH for INBOUND files ---");
+            
+            // Download Acknowledgements (ACK) & SFG Error messages from "/Inbox[span_2](start_span)"[span_2](end_span)
+            processor.pullAllFilesFromNACH("/Inbox", localInboxDirectory);
+            
+            // Download Inward (INW) & Response (RES) files from the bank-specific folder[span_3](start_span)[span_3](end_span)
+            processor.pullAllFilesFromNACH(bankShortCodeFolder, localInwResDirectory);
+        };
+
+        // --- SCHEDULER INITIALIZATION ---
+        // Initialize a thread pool of 2 to ensure tasks do not block each other[span_4](start_span)[span_4](end_span)
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+        
+        System.out.println("Starting H2H Automated File Transfer Solution. Polling every 10 minutes...");
+        
+        // Schedule the upload task to run every 10 minutes, starting immediately
+        scheduler.scheduleAtFixedRate(fileUploadTask, 0, 10, TimeUnit.MINUTES);
+        
+        // Schedule the download task to run every 10 minutes, offset by 5 minutes to stagger network load
+        scheduler.scheduleAtFixedRate(fileDownloadTask, 5, 10, TimeUnit.MINUTES);
+    }
+}
+
+
+
+
+
+package com.tcs.h2h.main;
+
+import com.jcraft.jsch.ChannelSftp;
+import com.tcs.h2h.util.SFTPUtil;
+import java.util.Vector;
+
+public class H2HMain {
+
+    private final String privateKeyPath;
+    private final String username;
+
+    public H2HMain(String privateKeyPath, String username) {
+        this.privateKeyPath = privateKeyPath;
+        this.username = username;
+    }
+
+    public boolean sendFileToNACH(String localFilePath, String remoteFileName) {
+        SFTPUtil sftpUtil = new SFTPUtil();
+        boolean isSuccess = false;
+
+        try {
+            System.out.println("Initiating SFTP connection to NACH for upload: " + remoteFileName);
+            sftpUtil.connect(username, privateKeyPath);
+            sftpUtil.uploadFile(localFilePath, remoteFileName);
+            System.out.println("File successfully uploaded.");
+            isSuccess = true;
+        } catch (Exception e) {
+            System.err.println("Failed to upload file: " + e.getMessage());
+        } finally {
+            sftpUtil.disconnect();
+        }
+
+        return isSuccess;
+    }
+
+    public void pullAllFilesFromNACH(String remoteDirectory, String localDestinationPath) {
+        SFTPUtil sftpUtil = new SFTPUtil();
+
+        try {
+            System.out.println("Initiating SFTP connection to scan remote directory: " + remoteDirectory);
+            sftpUtil.connect(username, privateKeyPath);
+            
+            Vector<ChannelSftp.LsEntry> fileList = sftpUtil.listFiles(remoteDirectory);
+            int downloadCount = 0;
+
+            for (ChannelSftp.LsEntry entry : fileList) {
+                // Ignore standard "." and ".." directory navigation elements
+                if (!entry.getAttrs().isDir()) {
+                    String fileName = entry.getFilename();
+                    String remoteFilePath = remoteDirectory + (remoteDirectory.endsWith("/") ? "" : "/") + fileName;
+                    String localFilePath = localDestinationPath + (localDestinationPath.endsWith("/") ? "" : "/") + fileName;
+                    
+                    System.out.println("Downloading: " + fileName);
+                    sftpUtil.downloadFile(remoteFilePath, localFilePath);
+                    
+                    // Remove from NACH server so it is not processed again in the next polling cycle
+                    sftpUtil.deleteRemoteFile(remoteFilePath);
+                    downloadCount++;
+                }
+            }
+            
+            if (downloadCount == 0) {
+                System.out.println("No new files found in " + remoteDirectory);
+            } else {
+                System.out.println("Successfully downloaded " + downloadCount + " files from " + remoteDirectory);
+            }
+
+        } catch (Exception e) {
+            System.err.println("Failed to pull files from " + remoteDirectory + ": " + e.getMessage());
+        } finally {
+            sftpUtil.disconnect();
+        }
+    }
+}
+
+
+
+
+
+package com.tcs.h2h.util;
+
+import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+import com.jcraft.jsch.SftpException;
+import java.util.Vector;
+
+public class SFTPUtil {
+
+    private Session session = null;
+    private ChannelSftp channelSftp = null;
+
+    /**
+     * Establishes an SFTP connection using SSH keys.
+     */
+    public void connect(String username, String privateKeyPath) throws JSchException {
+        JSch jsch = new JSch();
+        jsch.addIdentity(privateKeyPath);
+
+        // NACH Production Host to Host Connection routing over the INTERNET[span_2](start_span)[span_2](end_span)
+        String host = "nachh2h.npci.org.in"; 
+        int port = 9293; 
+
+        session = jsch.getSession(username, host, port);
+        
+        java.util.Properties config = new java.util.Properties();
+        // In a strict production setting, replace this by loading the NPCI known_hosts file
+        config.put("StrictHostKeyChecking", "no"); 
+        session.setConfig(config);
+
+        session.connect();
+        Channel channel = session.openChannel("sftp");
+        channel.connect();
+        channelSftp = (ChannelSftp) channel;
+    }
+
+    /**
+     * Executes the PUT command to upload a file to the server.
+     */
+    public void uploadFile(String localFilePath, String remoteFileName) throws SftpException {
+        if (channelSftp == null || !channelSftp.isConnected()) {
+            throw new SftpException(ChannelSftp.SSH_FX_FAILURE, "SFTP Channel is not connected.");
+        }
+        
+        // Files uploaded from the bank must be placed directly in the root directory ("/")[span_3](start_span)[span_3](end_span)
+        String destinationPath = "/" + remoteFileName;
+        channelSftp.put(localFilePath, destinationPath);
+    }
+
+    /**
+     * Executes the GET command to pull a file from the server[span_4](start_span)[span_4](end_span).
+     */
+    public void downloadFile(String remoteFilePath, String localDestinationPath) throws SftpException {
+        if (channelSftp == null || !channelSftp.isConnected()) {
+            throw new SftpException(ChannelSftp.SSH_FX_FAILURE, "SFTP Channel is not connected.");
+        }
+        
+        channelSftp.get(remoteFilePath, localDestinationPath);
+    }
+
+    /**
+     * Lists all files within a specified remote directory.
+     */
+    public Vector<ChannelSftp.LsEntry> listFiles(String remoteDirectory) throws SftpException {
+        if (channelSftp == null || !channelSftp.isConnected()) {
+            throw new SftpException(ChannelSftp.SSH_FX_FAILURE, "SFTP Channel is not connected.");
+        }
+        
+        return channelSftp.ls(remoteDirectory);
+    }
+
+    /**
+     * Deletes a file from the remote server (used after a successful download).
+     */
+    public void deleteRemoteFile(String remoteFilePath) throws SftpException {
+        if (channelSftp == null || !channelSftp.isConnected()) {
+            throw new SftpException(ChannelSftp.SSH_FX_FAILURE, "SFTP Channel is not connected.");
+        }
+        
+        channelSftp.rm(remoteFilePath);
+    }
+
+    /**
+     * Safely closes the SFTP channel and session.
+     */
+    public void disconnect() {
+        if (channelSftp != null && channelSftp.isConnected()) {
+            channelSftp.disconnect();
+        }
+        if (session != null && session.isConnected()) {
+            session.disconnect();
+        }
+    }
+}
